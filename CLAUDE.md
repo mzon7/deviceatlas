@@ -24,9 +24,10 @@
 
 ## Auth Rules
 - Auth components are provided by @mzon7/zon-incubator-sdk/auth: AuthProvider, useAuth, ProtectedRoute, AuthCallback
-- Email confirmation is DISABLED (auto-confirm) — signUp() returns a session immediately, no email verification needed
-- The /auth/callback route uses the AuthCallback component for OAuth/magic-link flows
-- Do NOT show "check your email" messages after signup — users are signed in instantly
+- Email confirmation is ENABLED — signUp() returns needsConfirmation: true when the user must verify their email
+- The /auth/callback route uses the AuthCallback component to exchange confirmation codes for sessions
+- SMTP is configured on the Supabase project — emails are delivered via Resend
+- After signup, show a clear "Check your email and click the confirmation link" message
 
 ## AI API Rules
 - Only use AI/LLM APIs for which API keys are available in .env.local
