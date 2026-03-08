@@ -4,6 +4,9 @@ import { supabase } from "./lib/supabase";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import HomePage from "./pages/HomePage";
+import AdminSignInPage from "./features/admin-sign-in/components/AdminSignInPage";
+import AdminLandingPage from "./features/admin-sign-in/components/AdminLandingPage";
+import AdminRoute from "./features/admin-sign-in/components/AdminRoute";
 
 export default function App() {
   return (
@@ -15,6 +18,20 @@ export default function App() {
         path="/auth/callback"
         element={<AuthCallback supabase={supabase} redirectTo="/home" />}
       />
+
+      {/* Admin sign-in entry point */}
+      <Route path="/admin/sign-in" element={<AdminSignInPage />} />
+
+      {/* Protected admin routes */}
+      <Route
+        path="/admin/devices"
+        element={
+          <AdminRoute>
+            <AdminLandingPage />
+          </AdminRoute>
+        }
+      />
+      <Route path="/admin" element={<Navigate to="/admin/sign-in" replace />} />
 
       {/* Protected routes */}
       <Route

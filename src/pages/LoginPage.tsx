@@ -1,10 +1,13 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@mzon7/zon-incubator-sdk/auth";
 
 export default function LoginPage() {
-  const { signIn, registrationError } = useAuth();
+  const { signIn } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get("redirectTo") ?? "/home";
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,11 +22,9 @@ export default function LoginPage() {
     if (err) {
       setError(err);
     } else {
-      navigate("/home", { replace: true });
+      navigate(redirectTo, { replace: true });
     }
   };
-
-  const displayError = error || registrationError;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -63,8 +64,8 @@ export default function LoginPage() {
             />
           </div>
 
-          {displayError && (
-            <p className="text-sm text-red-600">{displayError}</p>
+          {error && (
+            <p className="text-sm text-red-600">{error}</p>
           )}
 
           <button
