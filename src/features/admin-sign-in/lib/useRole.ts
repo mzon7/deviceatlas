@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@mzon7/zon-incubator-sdk/auth";
-import { supabase, dbTable } from "../../../lib/supabase";
+import { withDbErrorCapture } from "@mzon7/zon-incubator-sdk";
+import { supabase, dbTable, PROJECT_PREFIX } from "../../../lib/supabase";
 
 export type Role = "Admin" | "Editor" | "Viewer";
 
@@ -12,11 +13,12 @@ export function useRole() {
     enabled: !!user,
     staleTime: 5 * 60 * 1000, // 5 min
     queryFn: async (): Promise<Role | null> => {
-      const { data, error } = await supabase
-        .from(dbTable("roles"))
-        .select("role")
-        .eq("user_id", user!.id)
-        .maybeSingle();
+      const { data, error } = await withDbErrorCapture(
+        supabase,
+        dbTable("roles"),
+        supabase.from(dbTable("roles")).select("role").eq("user_id", user!.id).maybeSingle(),
+        PROJECT_PREFIX,
+      );
 
       if (error) throw new Error(error.message);
       return (data?.role as Role) ?? null;
