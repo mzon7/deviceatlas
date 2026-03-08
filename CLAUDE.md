@@ -91,3 +91,10 @@ Relationships: devices 1—* approvals; disease_states 1—* approvals; approval
 
 ### Integrations
 - **Sentry**: frontend init; edge functions log with request correlation id.
+
+## Design & Branding
+- A [DESIGN DIRECTIVE] block is injected into your prompt with the project's brand colors, fonts, and style.
+- You MUST use the specified primary/secondary colors, border radius, font style, and density in ALL UI components.
+- Do NOT use default Tailwind/shadcn theme colors (blue-500, gray-200, etc.) — always apply the brand palette.
+- If a design-tokens.css or tailwind theme config exists, use those values. If not, apply colors inline or via CSS variables.
+- Match the specified personality (e.g. "playful", "professional", "minimal") in your UI choices — spacing, copy tone, animation level.
