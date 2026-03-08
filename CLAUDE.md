@@ -47,3 +47,47 @@
   - `import { createProjectClient, dbTable, validateEnv, callEdgeFunction } from '@mzon7/zon-incubator-sdk'`
   - `import { AuthProvider, useAuth, ProtectedRoute, AuthCallback } from '@mzon7/zon-incubator-sdk/auth'`
 - The Supabase client and dbTable helper are already configured in `src/lib/supabase.ts`
+
+## Project Context
+
+## DeviceAtlas — Project Context (for Claude)
+
+### Domain & data model (Supabase Postgres)
+- **devices**
+  - `id uuid PK`, `name`, `manufacturer`, `category`, `is_active bool`, `created_at`, `updated_at`
+- **disease_states**
+  - `id uuid PK`, `name`, `description`, `created_at`, `updated_at`
+- **approvals**
+  - `id uuid PK`
+  - `device_id uuid FK -> devices.id`
+  - `disease_state_id uuid FK -> disease_states.id`
+  - `country enum {CA, US}`
+  - `status enum {Approved, Pending, Retired, ...}`
+  - `approval_date date?`, `retired_date date?`, `source_ref text?`
+  - `is_active bool (explicit or derived)`, `created_at`, `updated_at`
+- **approval_changes** (dashboard changelog)
+  - `id`, `approval_id FK -> approvals.id`, `change_type {added|updated|retired}`, `changed_at`, `changed_by (user id/email)`, `diff jsonb`
+- **audit_logs** (admin actions)
+  - `id`, `actor_id`, `actor_email`, `entity_type {device|approval|import}`, `entity_id`, `action {create|update|deactivate|retire|import}`, `diff jsonb`, `created_at`
+- **roles** (if not using auth claims)
+  - `user_id`, `role {Admin|Editor|Viewer}`
+
+Relationships: devices 1—* approvals; disease_states 1—* approvals; approvals 1—* approval_changes.
+
+### Query/search assumptions
+- Trigram GIN on `devices.name`, `disease_states.name`; btree on `devices.is_active`.
+- approvals indexes: `(country,status)`, `(device_id)`, `(disease_state_id)`, `(updated_at)`.
+- MVP queries join directly (materialized view optional later).
+
+### State & data access patterns
+- **React Query** for all server state (lists, search, detail, admin).
+- **URL search params are source of truth** for Search filters/sort/pagination via `useSearchParamsState`.
+- Local state only for form inputs + CSV preview.
+
+### Admin gating & mutations
+- Public pages: Supabase client `select` with filters/joins.
+- Admin writes + CSV import: **edge functions** via `callEdgeFunction` to centralize validation, role checks, audit log writes, bulk upserts.
+- RLS: public read-only; role-gated writes.
+
+### Integrations
+- **Sentry**: frontend init; edge functions log with request correlation id.
