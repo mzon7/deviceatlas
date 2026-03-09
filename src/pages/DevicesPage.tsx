@@ -11,6 +11,8 @@ interface Device {
   category: string | null;
   description: string | null;
   is_active: boolean;
+  cleared_date: string | null;
+  clearance_type: string | null;
 }
 
 const PAGE_SIZE = 24;
@@ -60,6 +62,10 @@ const CATEGORIES = [
   "Pulmonology",
 ];
 
+type ApprovalFilter = "All" | "PMA Approved" | "FDA Cleared" | "Pending";
+
+const APPROVAL_FILTERS: ApprovalFilter[] = ["All", "PMA Approved", "FDA Cleared", "Pending"];
+
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -72,19 +78,20 @@ function useDebounce<T>(value: T, delay: number): T {
 export default function DevicesPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
+  const [approvalFilter, setApprovalFilter] = useState<ApprovalFilter>("All");
   const [page, setPage] = useState(0);
 
   const debouncedSearch = useDebounce(search, 300);
 
   // Reset page on filter change
-  useEffect(() => { setPage(0); }, [debouncedSearch, category]);
+  useEffect(() => { setPage(0); }, [debouncedSearch, category, approvalFilter]);
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["devices-list", debouncedSearch, category, page],
+    queryKey: ["devices-list", debouncedSearch, category, approvalFilter, page],
     queryFn: async () => {
       let q = supabase
         .from(dbTable("devices"))
-        .select("id, name, manufacturer, category, description, is_active", { count: "exact" })
+        .select("id, name, manufacturer, category, description, is_active, cleared_date, clearance_type", { count: "exact" })
         .eq("is_active", true)
         .order("name")
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
@@ -94,6 +101,13 @@ export default function DevicesPage() {
       }
       if (category !== "All") {
         q = q.eq("category", category);
+      }
+      if (approvalFilter === "PMA Approved") {
+        q = q.eq("clearance_type", "PMA").not("cleared_date", "is", null);
+      } else if (approvalFilter === "FDA Cleared") {
+        q = q.not("clearance_type", "eq", "PMA").not("cleared_date", "is", null);
+      } else if (approvalFilter === "Pending") {
+        q = q.is("cleared_date", null);
       }
 
       const { data, error, count } = await q;
@@ -162,11 +176,11 @@ export default function DevicesPage() {
           </h1>
           <p style={{ fontSize: 15, color: "#777", maxWidth: 520, margin: "0 auto" }}>
             Track regulatory approvals from the FDA and Health Canada across{" "}
-            <span style={{ color: "#f457bb", fontWeight: 600 }}>11,000+ medical devices</span>.
+            <span style={{ color: "#f457bb", fontWeight: 600 }}>160,000+ medical devices</span>.
           </p>
         </div>
 
-        {/* Search + category filters */}
+        {/* Search + filters */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
           {/* Search bar */}
           <div style={{ position: "relative" }}>
@@ -191,7 +205,7 @@ export default function DevicesPage() {
             </svg>
             <input
               type="text"
-              placeholder="Search 11,000+ devices by name or manufacturer…"
+              placeholder="Search 160,000+ devices by name…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               style={{
@@ -218,14 +232,42 @@ export default function DevicesPage() {
             />
           </div>
 
-          {/* Category pills — scrollable row */}
-          <div
-            style={{
-              display: "flex",
-              gap: 6,
-              flexWrap: "wrap",
-            }}
-          >
+          {/* Approval status filter */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#aaa", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>
+              Status
+            </span>
+            {APPROVAL_FILTERS.map((af) => {
+              const active = approvalFilter === af;
+              const { color, bg, label } = getApprovalStyle(af);
+              return (
+                <button
+                  key={af}
+                  onClick={() => setApprovalFilter(af)}
+                  style={{
+                    padding: "6px 13px",
+                    borderRadius: 20,
+                    border: active ? `1px solid ${color}` : "1px solid rgba(0,0,0,0.09)",
+                    background: active ? bg : "rgba(255,255,255,0.85)",
+                    color: active ? color : "#555",
+                    fontSize: 12,
+                    fontWeight: active ? 700 : 400,
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}
+                >
+                  {af !== "All" && <ApprovalDot type={af} size={7} />}
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Category pills */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {CATEGORIES.map((cat) => {
               const active = category === cat;
               return (
@@ -274,7 +316,7 @@ export default function DevicesPage() {
                   {total.toLocaleString()}
                 </span>{" "}
                 device{total !== 1 ? "s" : ""}
-                {debouncedSearch || category !== "All" ? " found" : " total"}
+                {debouncedSearch || category !== "All" || approvalFilter !== "All" ? " found" : " total"}
                 {totalPages > 1 && (
                   <span style={{ color: "#ccc" }}>
                     {" "}· page {page + 1} of {totalPages}
@@ -322,7 +364,6 @@ export default function DevicesPage() {
               ← Previous
             </PagButton>
 
-            {/* Page number pills */}
             <div style={{ display: "flex", gap: 4 }}>
               {pageRange(page, totalPages).map((p) =>
                 p === "…" ? (
@@ -362,6 +403,68 @@ export default function DevicesPage() {
   );
 }
 
+// ─── Approval helpers ──────────────────────────────────────────────────────────
+
+function getApprovalStatus(device: Device): ApprovalFilter {
+  if (!device.cleared_date) return "Pending";
+  if (device.clearance_type === "PMA") return "PMA Approved";
+  return "FDA Cleared";
+}
+
+function getApprovalStyle(type: ApprovalFilter | "Pending") {
+  switch (type) {
+    case "PMA Approved":
+      return { color: "#059669", bg: "rgba(5,150,105,0.08)", label: "PMA Approved" };
+    case "FDA Cleared":
+      return { color: "#2563eb", bg: "rgba(37,99,235,0.08)", label: "FDA Cleared" };
+    case "Pending":
+      return { color: "#d97706", bg: "rgba(217,119,6,0.08)", label: "Pending" };
+    default:
+      return { color: "#555", bg: "transparent", label: "All" };
+  }
+}
+
+function ApprovalDot({ type, size = 8 }: { type: ApprovalFilter; size?: number }) {
+  const { color } = getApprovalStyle(type);
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background: color,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+function ApprovalStamp({ device }: { device: Device }) {
+  const status = getApprovalStatus(device);
+  const { color, bg, label } = getApprovalStyle(status);
+  const year = device.cleared_date ? new Date(device.cleared_date).getFullYear() : null;
+
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "3px 8px",
+        borderRadius: 10,
+        background: bg,
+        border: `1px solid ${color}22`,
+      }}
+    >
+      <ApprovalDot type={status} size={6} />
+      <span style={{ fontSize: 10, fontWeight: 700, color, letterSpacing: "0.02em" }}>
+        {label}{year ? ` · ${year}` : ""}
+      </span>
+    </div>
+  );
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function DeviceCard({ device }: { device: Device }) {
@@ -388,7 +491,7 @@ function DeviceCard({ device }: { device: Device }) {
           display: "flex",
           flexDirection: "column",
           gap: 8,
-          minHeight: 130,
+          minHeight: 140,
         }}
         onMouseEnter={(e) => {
           const el = e.currentTarget as HTMLElement;
@@ -468,7 +571,8 @@ function DeviceCard({ device }: { device: Device }) {
           </p>
         )}
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto", gap: 6, flexWrap: "wrap" }}>
+          <ApprovalStamp device={device} />
           {device.category && (
             <span
               style={{
@@ -505,7 +609,7 @@ function SkeletonGrid() {
         <div
           key={i}
           style={{
-            height: 130,
+            height: 140,
             borderRadius: 16,
             background: "rgba(255,255,255,0.7)",
             border: "1px solid rgba(244,87,187,0.08)",

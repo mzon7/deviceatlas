@@ -35,32 +35,17 @@ export default function PublicHeader() {
             textDecoration: "none",
           }}
         >
-          <div
+          <img
+            src="/logo.png"
+            alt="Device Atlas"
             style={{
               width: 34,
               height: 34,
               borderRadius: 10,
-              background: "linear-gradient(135deg, #f457bb, #ea105c)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              objectFit: "cover",
               boxShadow: "0 2px 8px rgba(244,87,187,0.35)",
             }}
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="white"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <polyline points="9 12 11 14 15 10" />
-            </svg>
-          </div>
+          />
           <span
             style={{
               fontWeight: 800,
@@ -72,7 +57,7 @@ export default function PublicHeader() {
               letterSpacing: "-0.02em",
             }}
           >
-            DeviceAtlas
+            Device Atlas
           </span>
         </Link>
 

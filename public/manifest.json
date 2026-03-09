@@ -1,0 +1,29 @@
+{
+  "name": "Device Atlas",
+  "short_name": "Device Atlas",
+  "description": "Track FDA and Health Canada medical device regulatory approvals",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fff0f8",
+  "theme_color": "#f457bb",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
