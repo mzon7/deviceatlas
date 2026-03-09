@@ -27,7 +27,7 @@ def grok_chat(prompt: str, system: str = "") -> str:
     messages.append({"role": "user", "content": prompt})
 
     payload = json.dumps({
-        "model": "grok-4-fast",
+        "model": "grok-4-1-fast-non-reasoning",
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": 8000

@@ -18,7 +18,7 @@ GROK_API_KEY = os.environ["GROK_API_KEY"]
 def grok(prompt: str, max_tokens=6000) -> str:
     url = "https://api.x.ai/v1/chat/completions"
     payload = json.dumps({
-        "model": "grok-4-fast",
+        "model": "grok-4-1-fast-non-reasoning",
         "messages": [
             {"role": "system", "content": "You are a medical device regulatory expert. Return ONLY valid JSON with no markdown fences."},
             {"role": "user", "content": prompt}
