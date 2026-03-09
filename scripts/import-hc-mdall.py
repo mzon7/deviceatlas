@@ -57,6 +57,7 @@ def mgmt_query(sql: str):
         headers={
             "Authorization": f"Bearer {SUPABASE_MGMT_TOKEN}",
             "Content-Type": "application/json",
+            "User-Agent": "curl/7.81.0",
         },
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
@@ -75,6 +76,7 @@ def rest_get(path: str, params: dict = None):
             "apikey": SUPABASE_SERVICE_ROLE_KEY,
             "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
             "Content-Type": "application/json",
+            "User-Agent": "curl/7.81.0",
         },
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
