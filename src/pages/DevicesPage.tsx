@@ -93,6 +93,7 @@ export default function DevicesPage() {
         .from(dbTable("devices"))
         .select("id, name, manufacturer, category, description, is_active, cleared_date, clearance_type", { count: "exact" })
         .eq("is_active", true)
+        .order("cleared_date", { ascending: false, nullsFirst: false })
         .order("name")
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
 
