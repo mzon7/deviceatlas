@@ -233,38 +233,73 @@ export default function DevicesPage() {
             />
           </div>
 
-          {/* Approval status filter */}
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#aaa", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>
-              Status
-            </span>
-            {APPROVAL_FILTERS.map((af) => {
-              const active = approvalFilter === af;
-              const { color, bg, label } = getApprovalStyle(af);
-              return (
-                <button
-                  key={af}
-                  onClick={() => setApprovalFilter(af)}
-                  style={{
-                    padding: "6px 13px",
-                    borderRadius: 20,
-                    border: active ? `1px solid ${color}` : "1px solid rgba(0,0,0,0.09)",
-                    background: active ? bg : "rgba(255,255,255,0.85)",
-                    color: active ? color : "#555",
-                    fontSize: 12,
-                    fontWeight: active ? 700 : 400,
-                    cursor: "pointer",
-                    transition: "all 0.15s",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5,
-                  }}
-                >
-                  {af !== "All" && <ApprovalDot type={af} size={7} />}
-                  {label}
-                </button>
-              );
-            })}
+          {/* Approval status filter + legend */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#aaa", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>
+                Status
+              </span>
+              {APPROVAL_FILTERS.map((af) => {
+                const active = approvalFilter === af;
+                const { color, bg, label } = getApprovalStyle(af);
+                return (
+                  <button
+                    key={af}
+                    onClick={() => setApprovalFilter(af)}
+                    style={{
+                      padding: "6px 13px",
+                      borderRadius: 20,
+                      border: active ? `1px solid ${color}` : "1px solid rgba(0,0,0,0.09)",
+                      background: active ? bg : "rgba(255,255,255,0.85)",
+                      color: active ? color : "#555",
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 400,
+                      cursor: "pointer",
+                      transition: "all 0.15s",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                    }}
+                  >
+                    {af !== "All" && <ApprovalDot type={af} size={7} />}
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Legend */}
+            <div
+              style={{
+                display: "flex",
+                gap: 16,
+                flexWrap: "wrap",
+                padding: "8px 14px",
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.7)",
+                border: "1px solid rgba(0,0,0,0.06)",
+                fontSize: 11,
+                color: "#888",
+              }}
+            >
+              {([
+                { type: "PMA Approved" as ApprovalFilter, desc: "Full FDA review — highest standard, required for Class III high-risk devices" },
+                { type: "FDA Cleared" as ApprovalFilter, desc: "510(k) clearance — substantially equivalent to a previously approved device" },
+                { type: "Pending" as ApprovalFilter, desc: "Approval date not yet available in our database" },
+              ] as const).map(({ type, desc }) => {
+                const { color, label } = getApprovalStyle(type);
+                return (
+                  <div key={type} style={{ display: "flex", alignItems: "flex-start", gap: 6, minWidth: 0 }}>
+                    <ApprovalDot type={type} size={8} />
+                    <span>
+                      <span style={{ fontWeight: 700, color }}>{label}</span>
+                      {" — "}
+                      {desc}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Category pills */}
@@ -446,8 +481,16 @@ function ApprovalStamp({ device }: { device: Device }) {
   const { color, bg, label } = getApprovalStyle(status);
   const year = device.cleared_date ? new Date(device.cleared_date).getFullYear() : null;
 
+  const tooltips: Record<ApprovalFilter, string> = {
+    "PMA Approved": "Full FDA Premarket Approval — most stringent review, required for Class III high-risk devices",
+    "FDA Cleared": "FDA 510(k) Clearance — device is substantially equivalent to a legally marketed predicate device",
+    "Pending": "Approval date not yet available in our database",
+    "All": "",
+  };
+
   return (
     <div
+      title={tooltips[status]}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -456,6 +499,7 @@ function ApprovalStamp({ device }: { device: Device }) {
         borderRadius: 10,
         background: bg,
         border: `1px solid ${color}22`,
+        cursor: "help",
       }}
     >
       <ApprovalDot type={status} size={6} />
