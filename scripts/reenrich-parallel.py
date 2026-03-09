@@ -9,7 +9,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
 SUPABASE_MGMT_TOKEN = os.environ["SUPABASE_MGMT_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+GROK_API_KEY = os.environ["GROK_API_KEY"]
 
 CATEGORIES = [
     "Cardiovascular", "Neurology", "Ophthalmology", "Radiology/Imaging",
@@ -25,9 +25,9 @@ WORKER = sys.argv[3] if len(sys.argv) > 3 else "0"
 BATCH = 25
 
 def grok(prompt: str) -> str:
-    url = "https://api.openai.com/v1/chat/completions"
+    url = "https://api.x.ai/v1/chat/completions"
     payload = json.dumps({
-        "model": "gpt-4o-mini",
+        "model": "grok-4-1-fast-non-reasoning",
         "messages": [
             {"role": "system", "content": "Medical device expert. Return ONLY valid JSON array, no markdown, no explanation."},
             {"role": "user", "content": prompt},
@@ -36,8 +36,9 @@ def grok(prompt: str) -> str:
         "max_tokens": 6000,
     }).encode()
     req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
+    req.add_header("Authorization", f"Bearer {GROK_API_KEY}")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "curl/7.81.0")
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())["choices"][0]["message"]["content"].strip()
 
