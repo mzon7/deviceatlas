@@ -17,8 +17,21 @@ import os, json, sys, time, urllib.request, urllib.error
 SUPABASE_URL       = os.environ["SUPABASE_URL"]
 SERVICE_KEY        = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 PROJECT_REF        = os.environ["SUPABASE_PROJECT_REF"]
-MGMT_TOKEN         = os.environ["SUPABASE_MGMT_TOKEN"]
 GROK_API_KEY       = os.environ["GROK_API_KEY"]
+# MGMT_TOKEN is read dynamically from file so it can be refreshed without restarting workers.
+# Update /tmp/mgmt_token.txt at the start of each new conversation session.
+MGMT_TOKEN_FILE    = "/tmp/mgmt_token.txt"
+
+def get_mgmt_token() -> str:
+    try:
+        with open(MGMT_TOKEN_FILE) as f:
+            token = f.read().strip()
+            if token:
+                return token
+    except FileNotFoundError:
+        pass
+    # Fallback to env var
+    return os.environ.get("SUPABASE_MGMT_TOKEN", "")
 
 CATEGORIES = [
     "Cardiovascular", "Neurology", "Ophthalmology", "Radiology/Imaging",
@@ -65,7 +78,7 @@ def grok(prompt: str) -> str:
 def mgmt_query(sql: str) -> list:
     url = f"https://api.supabase.com/v1/projects/{PROJECT_REF}/database/query"
     req = urllib.request.Request(url, data=json.dumps({"query": sql}).encode(), method="POST")
-    req.add_header("Authorization", f"Bearer {MGMT_TOKEN}")
+    req.add_header("Authorization", f"Bearer {get_mgmt_token()}")
     req.add_header("Content-Type", "application/json")
     req.add_header("User-Agent", "curl/7.81.0")
     with urllib.request.urlopen(req, timeout=30) as r:
