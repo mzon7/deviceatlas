@@ -22,7 +22,7 @@ CATEGORIES = [
 def grok(prompt: str) -> str:
     url = "https://api.x.ai/v1/chat/completions"
     payload = json.dumps({
-        "model": "grok-3",
+        "model": "grok-4-fast",
         "messages": [
             {"role": "system", "content": "You are a medical device expert. Return ONLY valid JSON, no markdown."},
             {"role": "user", "content": prompt},
