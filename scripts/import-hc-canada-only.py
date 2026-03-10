@@ -19,6 +19,91 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
 SUPABASE_MGMT_TOKEN = os.environ["SUPABASE_MGMT_TOKEN"]
 
+HC_LINK_BASE = "https://health-products.canada.ca/mdall-limh/deviceid-idproduit/"
+_tracking_buffer: list = []
+
+
+def rest_get(path: str, params: dict = None):
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    if params:
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{url}?{qs}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "curl/7.81.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
+def load_tracked_hc_refs() -> set:
+    """Load already-tracked HC licence numbers from import_tracking."""
+    print("Loading already-tracked HC MDALL refs from import_tracking...")
+    tracked = set()
+    limit = 5000
+    offset = 0
+    while True:
+        try:
+            rows = rest_get(
+                "deviceatlas_import_tracking",
+                {"select": "source_ref", "source": "eq.hc_mdall", "limit": str(limit), "offset": str(offset)}
+            )
+            for r in rows:
+                tracked.add(str(r["source_ref"]))
+            if len(rows) < limit:
+                break
+            offset += limit
+        except Exception as e:
+            print(f"  Warning: {e}")
+            break
+    print(f"  {len(tracked)} already-tracked HC licences")
+    return tracked
+
+
+def flush_tracking(force: bool = False):
+    global _tracking_buffer
+    if not _tracking_buffer or (not force and len(_tracking_buffer) < 500):
+        return
+    batch = _tracking_buffer[:]
+    _tracking_buffer = []
+    try:
+        payload = json.dumps(batch).encode()
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/deviceatlas_import_tracking",
+            data=payload,
+            method="POST",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=ignore-duplicates,return=minimal",
+                "User-Agent": "curl/7.81.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=60):
+            pass
+    except Exception as e:
+        print(f"  WARNING: tracking flush failed: {e}")
+
+
+def track(licence_no: str, status: str, device_id: str = None, notes: str = None):
+    row = {
+        "source": "hc_mdall",
+        "source_ref": str(licence_no),
+        "source_url": f"{HC_LINK_BASE}{licence_no}",
+        "fetch_status": status,
+        "notes": notes,
+    }
+    if device_id:
+        row["device_id"] = device_id
+    _tracking_buffer.append(row)
+    flush_tracking()
+
 RISK_CLASS_MAP = {
     1: "Class I",
     2: "Class II",
@@ -118,27 +203,20 @@ def main():
 
     # Find already-matched HC licence numbers
     matched_licence_nos = {m["hc"]["licence_no"] for m in matches}
-    print(f"Already matched: {len(matched_licence_nos)} licences")
+    print(f"Already matched to FDA: {len(matched_licence_nos)} licences")
 
-    # Get unmatched active licences
+    # Load tracking table — skip anything already tracked (imported or unmatched)
+    already_tracked = load_tracked_hc_refs()
+
+    # Get unmatched active licences not yet tracked
     unmatched = [
         l for l in active_licences
         if l.get("original_licence_no") not in matched_licence_nos
         and l.get("licence_name")
         and l.get("licence_status") == "I"  # Active only
+        and str(l.get("original_licence_no", "")) not in already_tracked
     ]
-    print(f"Canada-only devices to import: {len(unmatched)}")
-
-    # Check for already-imported HC devices (by source_ref in approvals)
-    print("Checking existing HC-only devices already in DB...")
-    existing = mgmt_query(
-        "SELECT source_ref FROM deviceatlas_approvals WHERE country='CA' AND disease_state_id IS NULL;"
-    )
-    existing_refs = {str(r["source_ref"]) for r in (existing or [])}
-    print(f"  Already imported: {len(existing_refs)}")
-
-    unmatched = [l for l in unmatched if str(l.get("original_licence_no", "")) not in existing_refs]
-    print(f"  Remaining to import: {len(unmatched)}")
+    print(f"Canada-only devices to import (new): {len(unmatched)}")
 
     # Batch insert devices + approvals
     batch_size = 200
@@ -189,6 +267,10 @@ def main():
             total_devices += len(device_rows)
             rest_post("deviceatlas_approvals", approval_rows)
             total_approvals += len(approval_rows)
+            # Track each inserted licence
+            for dev_row, apr_row in zip(device_rows, approval_rows):
+                track(apr_row["source_ref"], "inserted", device_id=dev_row["id"],
+                      notes=f"class={dev_row.get('device_class','?')}")
         except Exception as e:
             print(f"  ERROR on batch {i//batch_size}: {e}")
             errors += 1
@@ -198,6 +280,7 @@ def main():
         if (i // batch_size) % 10 == 0 and i > 0:
             print(f"  {total_devices}/{len(unmatched)} devices inserted...")
 
+    flush_tracking(force=True)
     print("\n" + "=" * 60)
     print(f"DONE.")
     print(f"  Devices inserted: {total_devices}")

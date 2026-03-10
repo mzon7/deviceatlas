@@ -31,6 +31,74 @@ HC_LICENCE_ARCHIVED_URL = "https://health-products.canada.ca/api/medical-devices
 HC_COMPANY_URL = "https://health-products.canada.ca/api/medical-devices/company/?type=json"
 
 MATCH_THRESHOLD = 0.72  # Minimum similarity score to count as a match
+HC_LINK_BASE = "https://health-products.canada.ca/mdall-limh/deviceid-idproduit/"
+
+_tracking_buffer: list = []
+
+
+def load_tracked_hc_refs() -> set:
+    """Load already-tracked HC licence numbers so we can skip them on re-runs."""
+    print("Loading already-tracked HC MDALL refs...")
+    tracked = set()
+    limit = 5000
+    offset = 0
+    while True:
+        try:
+            rows = rest_get(
+                "deviceatlas_import_tracking",
+                {"select": "source_ref", "source": "eq.hc_mdall", "limit": str(limit), "offset": str(offset)}
+            )
+            for r in rows:
+                tracked.add(str(r["source_ref"]))
+            if len(rows) < limit:
+                break
+            offset += limit
+        except Exception as e:
+            print(f"  Warning: could not load tracked refs: {e}")
+            break
+    print(f"  {len(tracked)} already-tracked HC licences (will skip on re-run)")
+    return tracked
+
+
+def flush_tracking(force: bool = False):
+    """Batch-insert buffered tracking rows."""
+    global _tracking_buffer
+    if not _tracking_buffer or (not force and len(_tracking_buffer) < 500):
+        return
+    batch = _tracking_buffer[:]
+    _tracking_buffer = []
+    try:
+        payload = json.dumps(batch).encode()
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/deviceatlas_import_tracking",
+            data=payload,
+            method="POST",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=ignore-duplicates,return=minimal",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=60):
+            pass
+    except Exception as e:
+        print(f"  WARNING: tracking flush failed: {e}")
+
+
+def track(licence_no: str, status: str, device_id: str = None, notes: str = None):
+    """Buffer a tracking row for later batch insert."""
+    row = {
+        "source": "hc_mdall",
+        "source_ref": str(licence_no),
+        "source_url": f"{HC_LINK_BASE}{licence_no}",
+        "fetch_status": status,
+        "notes": notes,
+    }
+    if device_id:
+        row["device_id"] = device_id
+    _tracking_buffer.append(row)
+    flush_tracking()
 
 
 def normalize(s: str) -> str:
@@ -146,11 +214,13 @@ def load_hc_data():
     return licences, archived, companies
 
 
-def build_hc_index(licences: list, archived: list, companies: list):
-    """Build normalized lookup structures."""
+def build_hc_index(licences: list, archived: list, companies: list, already_tracked: set = None):
+    """Build normalized lookup structures, skipping already-tracked licence numbers."""
     company_map = {c["company_id"]: c["company_name"] for c in companies}
+    already_tracked = already_tracked or set()
 
     all_licences = licences + archived
+    skipped = 0
 
     hc = []
     for lic in all_licences:
@@ -166,6 +236,10 @@ def build_hc_index(licences: list, archived: list, companies: list):
         if not name or not licence_no:
             continue
 
+        if str(licence_no) in already_tracked:
+            skipped += 1
+            continue
+
         hc.append({
             "licence_no": licence_no,
             "name": name,
@@ -178,7 +252,7 @@ def build_hc_index(licences: list, archived: list, companies: list):
             "norm_company": normalize(company),
         })
 
-    print(f"HC index built: {len(hc)} total licences (active + archived)")
+    print(f"HC index built: {len(hc)} new licences to process ({skipped} already tracked, skipped)")
     return hc
 
 
@@ -400,6 +474,25 @@ def insert_ca_approvals(matches: list, device_ds_map: dict):
     return inserted
 
 
+def write_tracking_for_hc(matches: list, hc_index: list):
+    """Write tracking rows for all HC licences examined: matched and unmatched."""
+    print("Writing import tracking rows for HC licences...")
+    matched_licence_nos = {str(m["hc"]["licence_no"]): m["device_id"] for m in matches}
+
+    written = 0
+    for h in hc_index:
+        lic_no = str(h["licence_no"])
+        if lic_no in matched_licence_nos:
+            track(lic_no, "imported", device_id=matched_licence_nos[lic_no],
+                  notes=f"name={h['name'][:80]}")
+        else:
+            track(lic_no, "unmatched", notes=f"name={h['name'][:80]}")
+        written += 1
+
+    flush_tracking(force=True)
+    print(f"  Tracked {written} HC licences ({len(matched_licence_nos)} imported, {written - len(matched_licence_nos)} unmatched)")
+
+
 def main():
     print("=" * 60)
     print("DeviceAtlas — Health Canada MDALL Real Data Import")
@@ -408,18 +501,26 @@ def main():
     # Step 1: Download HC data
     licences, archived, companies = load_hc_data()
 
-    # Step 2: Build index
-    hc_index = build_hc_index(licences, archived, companies)
+    # Step 2: Load already-tracked refs + build index (skipping already-processed)
+    already_tracked = load_tracked_hc_refs()
+    hc_index = build_hc_index(licences, archived, companies, already_tracked)
+
+    if not hc_index:
+        print("All HC licences already tracked. Nothing new to process.")
+        return
 
     # Step 3 & 4: Match (use cache if available, else load devices and match)
+    # NOTE: cache is for dev — on fresh re-runs with skip logic the cache may have stale data
     match_cache = "/tmp/hc_matches.json"
-    if os.path.exists(match_cache):
+    if os.path.exists(match_cache) and not already_tracked:
         print("Loading matches from cache (skipping device load + matching)...")
         with open(match_cache) as f:
             matches = json.load(f)
         fda_count = 173768  # known total
         print(f"  {len(matches)} matches loaded")
     else:
+        if os.path.exists(match_cache):
+            os.remove(match_cache)  # invalidate stale cache when re-running with skip logic
         fda_devices = load_fda_devices()
         fda_count = len(fda_devices)
         matches = match_devices(fda_devices, hc_index)
@@ -442,11 +543,12 @@ def main():
     # Step 7: Insert real CA approvals
     inserted = insert_ca_approvals(matches, device_ds_map)
 
+    # Step 8: Write tracking rows for everything we examined
+    write_tracking_for_hc(matches, hc_index)
+
     # Final summary
-    final_rows = rest_get("deviceatlas_approvals", {"select": "id", "country": "eq.CA", "limit": "1", "offset": "0"})
-    final_count = [{"cnt": "check DB directly"}]  # REST HEAD count not needed for summary
     print("\n" + "=" * 60)
-    print(f"DONE. Real HC CA approvals in DB: {final_count[0]['cnt'] if final_count else inserted}")
+    print(f"DONE. Inserted {inserted} CA approval rows.")
     print(f"Devices matched to HC licences: {len(matches)}/{fda_count} ({100*len(matches)//fda_count}%)")
     print("=" * 60)
 
