@@ -10,7 +10,7 @@ const LIGHT_BG = "rgba(188,0,45,0.03)";
 const BORDER = "rgba(188,0,45,0.12)";
 const HEADER_BG = "rgba(188,0,45,0.05)";
 
-function pmdaSearchUrl(deviceName: string) {
+function pmdaSearchUrl(_deviceName: string) {
   return `https://www.pmda.go.jp/english/review-services/reviews/approved-information/devices/0001.html`;
 }
 
