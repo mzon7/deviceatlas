@@ -261,6 +261,7 @@ def _gpt_call(system: str, user: str) -> dict | None:
             content = data["choices"][0]["message"]["content"].strip()
             content = re.sub(r"^```(?:json)?\s*", "", content)
             content = re.sub(r"\s*```$", "", content.strip())
+            time.sleep(2)  # throttle: ~25 req/min, stay under rate limit
             return json.loads(content)
         except urllib.error.HTTPError as e:
             if e.code == 429:
