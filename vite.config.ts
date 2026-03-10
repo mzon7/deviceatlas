@@ -9,6 +9,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
+      injectRegister: null,
       includeAssets: ["favicon.svg"],
       manifest: {
         name: "DeviceAtlas",

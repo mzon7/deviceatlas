@@ -12,6 +12,19 @@ const queryClient = new QueryClient();
 
 installFrontendErrorCapture(supabase, PROJECT_PREFIX);
 
+// Register service worker with error handling to prevent unhandled rejections.
+// VitePWA injectRegister is set to null so we control registration here.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js", { scope: "/" })
+      .catch(() => {
+        // SW registration can fail in private/incognito mode or due to
+        // stale cached assets — app works normally without it.
+      });
+  });
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
