@@ -1,4 +1,8 @@
 import { useParams, Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { callEdgeFunction } from "@mzon7/zon-incubator-sdk";
+import { supabase } from "../../../lib/supabase";
 import { useDeviceProfile } from "../lib/useDeviceProfile";
 import DeviceMetaCard from "./DeviceMetaCard";
 import ApprovalSection from "./ApprovalSection";
@@ -11,6 +15,22 @@ import JapanApprovalSection from "../../japan-pmda-data/components/JapanApproval
 export default function DeviceProfilePage() {
   const { deviceId } = useParams<{ deviceId: string }>();
   const { data, isLoading, isError, error } = useDeviceProfile(deviceId);
+  const queryClient = useQueryClient();
+  const [enriching, setEnriching] = useState(false);
+  const enrichedRef = useRef(false);
+
+  useEffect(() => {
+    if (!data || enrichedRef.current) return;
+    const needsEnrichment =
+      !data.device.enrichment_method || data.device.enrichment_method === "not_enriched";
+    if (!needsEnrichment) return;
+    enrichedRef.current = true;
+    setEnriching(true);
+    callEdgeFunction(supabase, "enrich-device", { deviceId }).then(() => {
+      setEnriching(false);
+      queryClient.invalidateQueries({ queryKey: ["device-profile", deviceId] });
+    });
+  }, [data, deviceId, queryClient]);
 
   return (
     <div
@@ -143,6 +163,42 @@ export default function DeviceProfilePage() {
                 Approved indications by jurisdiction, sourced from FDA, Health Canada MDALL, EUDAMED, and Japan PMDA.
               </p>
             </div>
+
+            {/* On-demand enrichment banner */}
+            {enriching && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "14px 20px",
+                  borderRadius: 12,
+                  background: "rgba(244,87,187,0.06)",
+                  border: "1px solid rgba(244,87,187,0.2)",
+                }}
+              >
+                <div
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: "50%",
+                    border: "2.5px solid rgba(244,87,187,0.3)",
+                    borderTopColor: "#f457bb",
+                    animation: "spin 0.8s linear infinite",
+                    flexShrink: 0,
+                  }}
+                />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#f457bb" }}>
+                    Analyzing device indications…
+                  </div>
+                  <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
+                    Looking up FDA classification data and identifying disease states. This takes a few seconds.
+                  </div>
+                </div>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              </div>
+            )}
 
             {/* USA approvals */}
             <ApprovalSection country="US" approvals={data.us_approvals} />
