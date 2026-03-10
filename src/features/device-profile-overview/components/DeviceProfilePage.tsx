@@ -6,6 +6,7 @@ import DeviceSkeleton from "./DeviceSkeleton";
 import PublicHeader from "../../shared/components/PublicHeader";
 import EUApprovalSection from "../../europe-and-uk-data/components/EUApprovalSection";
 import UKApprovalSection from "../../europe-and-uk-data/components/UKApprovalSection";
+import JapanApprovalSection from "../../japan-pmda-data/components/JapanApprovalSection";
 
 export default function DeviceProfilePage() {
   const { deviceId } = useParams<{ deviceId: string }>();
@@ -139,7 +140,7 @@ export default function DeviceProfilePage() {
                 Regulatory Approvals
               </h2>
               <p style={{ fontSize: 13, color: "#888", margin: "0 0 16px" }}>
-                Approved indications by jurisdiction, sourced from FDA, Health Canada MDALL, and EUDAMED.
+                Approved indications by jurisdiction, sourced from FDA, Health Canada MDALL, EUDAMED, and Japan PMDA.
               </p>
             </div>
 
@@ -155,6 +156,9 @@ export default function DeviceProfilePage() {
             {/* UK approvals */}
             <UKApprovalSection approvals={data.uk_approvals ?? []} />
 
+            {/* Japan approvals */}
+            <JapanApprovalSection approvals={data.jp_approvals ?? []} />
+
             {/* Footer note */}
             <div
               style={{
@@ -164,7 +168,7 @@ export default function DeviceProfilePage() {
                 paddingTop: 8,
               }}
             >
-              Data sourced from FDA PMA/510(k), Health Canada MDALL, and EU EUDAMED databases.
+              Data sourced from FDA PMA/510(k), Health Canada MDALL, EU EUDAMED, and Japan PMDA databases.
               Last updated:{" "}
               {data.device.updated_at
                 ? new Date(data.device.updated_at).toLocaleDateString("en-CA")

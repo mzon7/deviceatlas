@@ -67,6 +67,7 @@ serve(async (req) => {
     const caApprovals = (approvals || []).filter((a) => a.country === "CA");
     const euApprovals = (approvals || []).filter((a) => a.country === "EU");
     const ukApprovals = (approvals || []).filter((a) => a.country === "UK");
+    const jpApprovals = (approvals || []).filter((a) => a.country === "JP");
 
     // Count summaries
     const summary = {
@@ -74,11 +75,13 @@ serve(async (req) => {
       ca_count: caApprovals.length,
       eu_count: euApprovals.length,
       uk_count: ukApprovals.length,
+      jp_count: jpApprovals.length,
       total_count: (approvals || []).length,
       us_approved_count: usApprovals.filter((a) => a.status === "Approved").length,
       ca_approved_count: caApprovals.filter((a) => a.status === "Approved").length,
       eu_approved_count: euApprovals.filter((a) => a.status === "Approved").length,
       uk_approved_count: ukApprovals.filter((a) => a.status === "Approved").length,
+      jp_approved_count: jpApprovals.filter((a) => a.status === "Approved").length,
     };
 
     return new Response(
@@ -90,6 +93,7 @@ serve(async (req) => {
           ca_approvals: caApprovals,
           eu_approvals: euApprovals,
           uk_approvals: ukApprovals,
+          jp_approvals: jpApprovals,
           summary,
         },
         error: null,
