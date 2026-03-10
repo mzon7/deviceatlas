@@ -72,6 +72,13 @@ WORKERS = [
         "ps_pattern":  "enrich-hc-devices.py 1",
         "done_marker": "No more devices. Total enriched:",
     },
+    {
+        "name":        "pmda-import",
+        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/import-pmda.py"],
+        "log":         "/tmp/pmda-import3.log",
+        "ps_pattern":  "import-pmda.py",
+        "done_marker": "DONE — Japan PMDA Import Summary",
+    },
 ]
 
 
