@@ -17,26 +17,25 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
 SUPABASE_MGMT_TOKEN = os.environ["SUPABASE_MGMT_TOKEN"]
-GROK_API_KEY = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]  # switched from GROK_API_KEY on 2026-03-10
 
-def grok_chat(prompt: str, system: str = "") -> str:
-    url = "https://api.x.ai/v1/chat/completions"
+def gpt_chat(prompt: str, system: str = "") -> str:
+    url = "https://api.openai.com/v1/chat/completions"
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
     payload = json.dumps({
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "gpt-4o",
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": 8000
     }).encode()
 
     req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {GROK_API_KEY}")
+    req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
     req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "curl/7.81.0")
 
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read())
@@ -199,8 +198,8 @@ Return ONLY valid JSON in this exact format:
   ]
 }}"""
 
-    print("Calling Grok API to enrich device data...")
-    response = grok_chat(prompt, system="You are a medical regulatory expert. Return only valid JSON, no markdown code blocks, no explanation.")
+    print("Calling GPT-4o API to enrich device data...")
+    response = gpt_chat(prompt, system="You are a medical regulatory expert. Return only valid JSON, no markdown code blocks, no explanation.")
 
     # Clean up response - remove markdown code blocks if present
     response = response.strip()

@@ -38,7 +38,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
 SUPABASE_MGMT_TOKEN = os.environ["SUPABASE_MGMT_TOKEN"]
-GROK_API_KEY = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]  # switched from GROK_API_KEY on 2026-03-10
 
 PMDA_PDF_URL = "https://www.pmda.go.jp/files/000277670.pdf"
 PMDA_PDF_CACHE = "/tmp/pmda_devices.pdf"
@@ -174,7 +174,7 @@ def track(source_ref: str, status: str, device_id: str = None,
     _tracking_buffer.append(row)
     flush_tracking()
 
-# ─── Grok AI ─────────────────────────────────────────────────────────────────
+# ─── GPT-4o AI (switched from Grok on 2026-03-10; existing rows have enrichment_method="grok_inferred") ──
 
 PMDA_SYSTEM_PROMPT = """You are a medical device regulatory expert analyzing PMDA (Japan) approved devices.
 Given a device name and its PMDA classification term, identify 1-4 disease states or clinical indications.
@@ -187,7 +187,7 @@ Return ONLY valid JSON (no markdown):
   "indications": [
     {"name": "Disease or condition name (FDA taxonomy)", "confidence": "high|medium|low"}
   ],
-  "enrichment_method": "grok_inferred",
+  "enrichment_method": "gpt_inferred",
   "enrichment_confidence": "high|medium|low"
 }
 
@@ -198,13 +198,13 @@ Rules:
 - enrichment_confidence = highest confidence of any indication"""
 
 
-def grok_classify(device_name: str, term_name: str, review_category: str, notes: str = "") -> dict | None:
+def gpt_classify(device_name: str, term_name: str, review_category: str, notes: str = "") -> dict | None:
     context = f"Device: {device_name}\nTerm name: {term_name}\nPMDA specialty: {review_category}"
     if notes:
         context += f"\nDescription: {notes[:500]}"
 
     payload = json.dumps({
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": PMDA_SYSTEM_PROMPT},
             {"role": "user", "content": context},
@@ -213,12 +213,11 @@ def grok_classify(device_name: str, term_name: str, review_category: str, notes:
         "max_tokens": 600,
     }).encode()
     req = urllib.request.Request(
-        "https://api.x.ai/v1/chat/completions",
+        "https://api.openai.com/v1/chat/completions",
         data=payload, method="POST",
         headers={
-            "Authorization": f"Bearer {GROK_API_KEY}",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
-            "User-Agent": "curl/7.81.0",
         },
     )
     try:
@@ -229,7 +228,7 @@ def grok_classify(device_name: str, term_name: str, review_category: str, notes:
             content = re.sub(r"\n?```$", "", content)
             return json.loads(content)
     except Exception as e:
-        print(f"  Grok error: {e}")
+        print(f"  GPT error: {e}")
         return None
 
 # ─── PDF parsing ──────────────────────────────────────────────────────────────
@@ -703,10 +702,10 @@ def process_and_insert(pmda_rows: list[dict], review_urls: dict, already_tracked
         notes = row.get("notes", "")
 
         if term_name or review_category:
-            result = grok_classify(brand, term_name, review_category, notes)
+            result = gpt_classify(brand, term_name, review_category, notes)
             if result and result.get("indications"):
                 indications = result["indications"]
-                enrichment_method = result.get("enrichment_method", "grok_inferred")
+                enrichment_method = result.get("enrichment_method", "gpt_inferred")
                 enrichment_confidence = result.get("enrichment_confidence", "medium")
                 indications_text = "; ".join(
                     f"{ind['name']} [{ind.get('confidence', 'medium')}]"
@@ -812,7 +811,7 @@ def main():
     new_rows = match_to_db(new_rows, db_devices)
 
     # Step 7: Process and insert
-    print(f"\nProcessing {len(new_rows)} PMDA devices (Grok classify + DB insert)...")
+    print(f"\nProcessing {len(new_rows)} PMDA devices (GPT-4o classify + DB insert)...")
     matched, created, approvals, skipped = process_and_insert(new_rows, review_urls, already_tracked)
 
     # Final summary

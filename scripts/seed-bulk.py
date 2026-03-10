@@ -2,7 +2,8 @@
 """
 Bulk seed DeviceAtlas with hundreds of real FDA medical devices.
 Fetches from PMA, 510(k), and De Novo databases across all specialties,
-enriches with Grok AI descriptions, and inserts into Supabase.
+enriches with GPT-4o AI descriptions, and inserts into Supabase.
+(NOTE: original run used Grok/xAI; switched to GPT-4o on 2026-03-10)
 """
 
 import os, json, time, uuid, urllib.request, urllib.error, sys
@@ -11,14 +12,14 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
 SUPABASE_MGMT_TOKEN = os.environ["SUPABASE_MGMT_TOKEN"]
-GROK_API_KEY = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]  # switched from GROK_API_KEY on 2026-03-10
 
 # ─── API helpers ──────────────────────────────────────────────────────────────
 
-def grok(prompt: str, max_tokens=6000) -> str:
-    url = "https://api.x.ai/v1/chat/completions"
+def gpt(prompt: str, max_tokens=6000) -> str:
+    url = "https://api.openai.com/v1/chat/completions"
     payload = json.dumps({
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": "You are a medical device regulatory expert. Return ONLY valid JSON with no markdown fences."},
             {"role": "user", "content": prompt}
@@ -27,9 +28,8 @@ def grok(prompt: str, max_tokens=6000) -> str:
         "max_tokens": max_tokens
     }).encode()
     req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {GROK_API_KEY}")
+    req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
     req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "curl/7.81.0")
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())["choices"][0]["message"]["content"].strip()
 
@@ -198,7 +198,7 @@ CATEGORY_MAP = {
 }
 
 def enrich_batch(batch: list) -> list:
-    """Call Grok to generate descriptions, categories, and disease states for a batch."""
+    """Call GPT-4o to generate descriptions, categories, and disease states for a batch."""
     summaries = []
     for d in batch:
         if d["_source"] == "PMA":
@@ -245,7 +245,7 @@ For EACH device, output one JSON object with these EXACT keys:
 
 Return ONLY a JSON array of {len(summaries)} objects. No explanation, no markdown."""
 
-    raw = grok(prompt, max_tokens=8000)
+    raw = gpt(prompt, max_tokens=8000)
     # Strip markdown fences if present
     if raw.startswith("```"):
         lines = raw.split("\n")
@@ -364,7 +364,7 @@ def main():
         print("Nothing to seed!")
         return
 
-    # Process in batches of 15 (keeps Grok prompt manageable)
+    # Process in batches of 15 (keeps GPT-4o prompt manageable)
     BATCH = 15
     batches = [new_fda[i:i+BATCH] for i in range(0, len(new_fda), BATCH)]
     print(f"Processing {len(batches)} batches of up to {BATCH}...")

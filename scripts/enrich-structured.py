@@ -11,11 +11,12 @@ For FDA devices (have product_code):
   enrichment_method = "fda_classification", confidence = high/medium
 
 For non-FDA devices (HC-only, EU-only — no product_code):
-  1. Grok gets: device trade name + device_class (HC I-IV / EUDAMED risk class)
-  2. System prompt instructs Grok to use FDA disease taxonomy terms for
+  1. GPT-4o gets: device trade name + device_class (HC I-IV / EUDAMED risk class)
+  2. System prompt instructs GPT-4o to use FDA disease taxonomy terms for
      disease state names → ensures cross-country consistency
-  enrichment_method = "grok_inferred", confidence = low/medium based on
+  enrichment_method = "gpt_inferred", confidence = low/medium based on
   how specific the device name is
+  (NOTE: existing DB rows with enrichment_method="grok_inferred" were done with xAI Grok)
 
 All disease states created are matched/created in deviceatlas_disease_states
 using the same normalized names → HC and EU approvals share identical
@@ -36,12 +37,12 @@ from difflib import SequenceMatcher
 SUPABASE_URL   = os.environ["SUPABASE_URL"]
 SERVICE_KEY    = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 PROJECT_REF    = os.environ["SUPABASE_PROJECT_REF"]
-GROK_API_KEY   = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY  = os.environ["OPENAI_API_KEY"]
 
-WORKER_ID      = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-BATCH          = 25
-GROK_MODEL     = "grok-4-1-fast-non-reasoning"
-GROK_ENDPOINT  = "https://api.x.ai/v1/chat/completions"
+WORKER_ID       = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+BATCH           = 25
+OPENAI_MODEL    = "gpt-4o"  # switched from grok-4-1-fast-non-reasoning (xAI) on 2026-03-10
+OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 FDA_CLASS_CACHE = "/tmp/fda_class_cache.json"
 MGMT_TOKEN_FILE = "/tmp/mgmt_token.txt"
 
@@ -172,7 +173,7 @@ def build_fda_class_cache(product_codes: list) -> dict:
     print(f"[W{WORKER_ID}] FDA cache complete: {len(cache)} entries")
     return cache
 
-# ── Grok enrichment ───────────────────────────────────────────────────────────
+# ── GPT-4o enrichment (switched from Grok on 2026-03-10) ─────────────────────
 FDA_SYSTEM_PROMPT = """You are a medical device classification expert with deep knowledge of
 FDA regulatory taxonomy and global medical device categories.
 
@@ -207,11 +208,11 @@ Return a JSON object with:
   (e.g. "Type 2 Diabetes Mellitus", "Hypertension", "Osteoarthritis of the Knee").
   confidence: "high" if the device name clearly indicates the indication,
   "medium" if likely, "low" if inferred. Limit 1-4. Return [] if genuinely unclear.
-- "enrichment_method": "grok_inferred"
+- "enrichment_method": "gpt_inferred"
 
 Return ONLY the JSON object."""
 
-def grok_enrich_fda(device_name: str, classification: dict) -> dict | None:
+def gpt_enrich_fda(device_name: str, classification: dict) -> dict | None:
     context = (
         f"Trade name: {device_name}\n"
         f"FDA generic name: {classification['generic_name']}\n"
@@ -221,10 +222,10 @@ def grok_enrich_fda(device_name: str, classification: dict) -> dict | None:
     )
     if classification.get("definition"):
         context += f"FDA definition: {classification['definition']}\n"
-    return _grok_call(FDA_SYSTEM_PROMPT, context)
+    return _gpt_call(FDA_SYSTEM_PROMPT, context)
 
-def grok_enrich_non_fda(device_name: str, device_class: str | None,
-                        country_origin: str) -> dict | None:
+def gpt_enrich_non_fda(device_name: str, device_class: str | None,
+                       country_origin: str) -> dict | None:
     class_label = ""
     if device_class:
         class_label = f"\nDevice risk class: {device_class}"
@@ -233,11 +234,11 @@ def grok_enrich_non_fda(device_name: str, device_class: str | None,
         f"Regulatory origin: {country_origin}{class_label}\n"
         f"(No FDA product code — classify using FDA disease taxonomy for consistency)"
     )
-    return _grok_call(NON_FDA_SYSTEM_PROMPT, context)
+    return _gpt_call(NON_FDA_SYSTEM_PROMPT, context)
 
-def _grok_call(system: str, user: str) -> dict | None:
+def _gpt_call(system: str, user: str) -> dict | None:
     payload = json.dumps({
-        "model": GROK_MODEL,
+        "model": OPENAI_MODEL,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -249,11 +250,10 @@ def _grok_call(system: str, user: str) -> dict | None:
     for attempt in range(5):
         try:
             req = urllib.request.Request(
-                GROK_ENDPOINT, data=payload, method="POST",
+                OPENAI_ENDPOINT, data=payload, method="POST",
                 headers={
-                    "Authorization": f"Bearer {GROK_API_KEY}",
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
                     "Content-Type": "application/json",
-                    "User-Agent": "curl/7.81.0",
                 },
             )
             with urllib.request.urlopen(req, timeout=30) as r:
@@ -265,7 +265,7 @@ def _grok_call(system: str, user: str) -> dict | None:
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 wait = 60 * (attempt + 1)
-                print(f"[W{WORKER_ID}]   Grok 429 — sleeping {wait}s")
+                print(f"[W{WORKER_ID}]   GPT 429 — sleeping {wait}s")
                 time.sleep(wait)
                 continue
             raise
@@ -417,7 +417,7 @@ def main():
                 # FDA device — use structured classification
                 classification = fda_cache.get(product_code)
                 if classification and (classification.get("generic_name") or classification.get("specialty")):
-                    result = grok_enrich_fda(dev_name, classification)
+                    result = gpt_enrich_fda(dev_name, classification)
                     final_method = "fda_classification"
                     k = dev.get("submission_number", "")
                     source = f"FDA Product Classification (code: {product_code}, generic: '{classification['generic_name']}')"
@@ -427,16 +427,16 @@ def main():
                 else:
                     # product_code known but no classification data → fall back to inference
                     origin = infer_origin(dev)
-                    result = grok_enrich_non_fda(dev_name, dev.get("device_class"), origin)
-                    final_method = "grok_inferred"
+                    result = gpt_enrich_non_fda(dev_name, dev.get("device_class"), origin)
+                    final_method = "gpt_inferred"
                     source = f"FDA product_code {product_code} (no classification data); trade name inference using FDA taxonomy"
                     non_fda_count += 1
             else:
                 # Non-FDA device (HC-only, EU-only) — infer using FDA taxonomy
                 origin = infer_origin(dev)
                 device_class = dev.get("device_class")
-                result = grok_enrich_non_fda(dev_name, device_class, origin)
-                final_method = "grok_inferred"
+                result = gpt_enrich_non_fda(dev_name, device_class, origin)
+                final_method = "gpt_inferred"
                 class_info = f", device class {device_class}" if device_class else ""
                 source = (
                     f"Inferred from {origin} device trade name{class_info}. "

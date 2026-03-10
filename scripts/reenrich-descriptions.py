@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Re-enrich devices that have generic/missing descriptions.
-Processes in batches of 20, asking Grok for proper descriptions and correct categories.
+Processes in batches of 20, asking GPT-4o for proper descriptions and correct categories.
+(NOTE: original run used Grok/xAI; switched to GPT-4o on 2026-03-10)
 """
 import os, json, time, urllib.request, urllib.error
 
@@ -9,7 +10,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
 SUPABASE_MGMT_TOKEN = os.environ["SUPABASE_MGMT_TOKEN"]
-GROK_API_KEY = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]  # switched from GROK_API_KEY on 2026-03-10
 
 CATEGORIES = [
     "Cardiovascular", "Neurology", "Ophthalmology", "Radiology/Imaging",
@@ -19,10 +20,10 @@ CATEGORIES = [
     "Dermatology", "Pulmonology",
 ]
 
-def grok(prompt: str) -> str:
-    url = "https://api.x.ai/v1/chat/completions"
+def gpt(prompt: str) -> str:
+    url = "https://api.openai.com/v1/chat/completions"
     payload = json.dumps({
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": "You are a medical device expert. Return ONLY valid JSON, no markdown."},
             {"role": "user", "content": prompt},
@@ -31,9 +32,8 @@ def grok(prompt: str) -> str:
         "max_tokens": 6000,
     }).encode()
     req = urllib.request.Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"Bearer {GROK_API_KEY}")
+    req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
     req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "curl/7.81.0")
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())["choices"][0]["message"]["content"].strip()
 
@@ -99,7 +99,7 @@ Rules:
 - Each description should be 1-3 sentences, patient-friendly
 - Return ONLY the JSON array"""
 
-    raw = grok(prompt)
+    raw = gpt(prompt)
     if raw.startswith("```"):
         lines = raw.split("\n")
         raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])

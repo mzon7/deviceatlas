@@ -5,7 +5,8 @@ Enrich HC-only devices (country=CA, disease_state_id=null) with:
 2. Disease states it treats (matched to existing deviceatlas_disease_states)
 
 For each batch of devices:
-- Ask Grok for description + 1-3 disease states
+- Ask GPT-4o for description + 1-3 disease states
+(NOTE: original run used Grok/xAI; switched to GPT-4o on 2026-03-10)
 - Match disease states to existing DB records (fuzzy by name)
 - Create new disease states if genuinely novel
 - Update device description
@@ -22,7 +23,7 @@ from difflib import SequenceMatcher
 SUPABASE_URL      = os.environ["SUPABASE_URL"]
 SERVICE_KEY       = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 PROJECT_REF       = os.environ["SUPABASE_PROJECT_REF"]
-GROK_API_KEY      = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY    = os.environ["OPENAI_API_KEY"]  # switched from GROK_API_KEY on 2026-03-10
 MGMT_TOKEN_FILE   = "/tmp/mgmt_token.txt"
 
 WORKER = sys.argv[1] if len(sys.argv) > 1 else "0"
@@ -92,10 +93,10 @@ def rest_patch(path: str, params: dict, data: dict) -> int:
         return r.status
 
 
-def grok(prompt: str, system: str = "Medical device expert. Return ONLY valid JSON, no markdown.") -> str:
-    url = "https://api.x.ai/v1/chat/completions"
+def gpt(prompt: str, system: str = "Medical device expert. Return ONLY valid JSON, no markdown.") -> str:
+    url = "https://api.openai.com/v1/chat/completions"
     payload = json.dumps({
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -105,20 +106,19 @@ def grok(prompt: str, system: str = "Medical device expert. Return ONLY valid JS
     }).encode()
     for attempt in range(8):
         req = urllib.request.Request(url, data=payload, method="POST")
-        req.add_header("Authorization", f"Bearer {GROK_API_KEY}")
+        req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
         req.add_header("Content-Type", "application/json")
-        req.add_header("User-Agent", "curl/7.81.0")
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 return json.loads(r.read())["choices"][0]["message"]["content"].strip()
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 wait = 60 * (attempt + 1)
-                print(f"[W{WORKER}] Grok 429 — sleeping {wait}s", flush=True)
+                print(f"[W{WORKER}] GPT 429 — sleeping {wait}s", flush=True)
                 time.sleep(wait)
             else:
                 raise
-    raise RuntimeError("Grok exhausted retries")
+    raise RuntimeError("GPT exhausted retries")
 
 
 def load_all_disease_states() -> dict:
@@ -183,7 +183,7 @@ def fetch_batch(after_id: str) -> list:
 
 
 def enrich_batch(devices: list, ds_map: dict) -> int:
-    """Ask Grok to enrich a batch of devices, update DB."""
+    """Ask GPT-4o to enrich a batch of devices, update DB."""
     summaries = []
     for d in devices:
         summaries.append({
@@ -203,7 +203,7 @@ Return a JSON array with exactly {len(summaries)} objects, preserving the "id" f
 [{{"id":"...","description":"...","disease_states":["condition 1","condition 2"]}}]"""
 
     try:
-        raw = grok(prompt)
+        raw = gpt(prompt)
         # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -213,7 +213,7 @@ Return a JSON array with exactly {len(summaries)} objects, preserving the "id" f
         if not isinstance(items, list):
             items = list(items.values()) if isinstance(items, dict) else []
     except Exception as e:
-        print(f"[W{WORKER}] Grok parse error: {e}", flush=True)
+        print(f"[W{WORKER}] GPT parse error: {e}", flush=True)
         return 0
 
     updated = 0
@@ -308,7 +308,7 @@ def main():
 
         print(f"[W{WORKER}] batch={batch_num} cursor={cursor[:8]}... ✓ +{n} (total={total})", flush=True)
 
-        # Small delay to avoid Grok rate limits
+        # Small delay to avoid GPT rate limits
         time.sleep(1)
 
 

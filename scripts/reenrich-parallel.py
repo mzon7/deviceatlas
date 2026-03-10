@@ -9,15 +9,16 @@ Changes vs original:
 - Cursor pagination (WHERE id > last_id) instead of OFFSET — not affected by shrinking result set
 - ID-parity sharding instead of offset ranges — stable split even as rows are enriched
 - MGMT API for fetch (supports LENGTH filter) with 403/error logging that exits clearly
-- Grok 429 exponential backoff: 60s, 120s, 180s... up to 8 attempts
-- Only 2 workers to stay under Grok rate limits
+- GPT 429 exponential backoff: 60s, 120s, 180s... up to 8 attempts
+- Only 2 workers to stay within rate limits
+(NOTE: original run used Grok/xAI; switched to GPT-4o on 2026-03-10)
 """
 import os, json, sys, time, urllib.request, urllib.error
 
 SUPABASE_URL       = os.environ["SUPABASE_URL"]
 SERVICE_KEY        = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 PROJECT_REF        = os.environ["SUPABASE_PROJECT_REF"]
-GROK_API_KEY       = os.environ["GROK_API_KEY"]
+OPENAI_API_KEY     = os.environ["OPENAI_API_KEY"]  # switched from GROK_API_KEY on 2026-03-10
 # MGMT_TOKEN is read dynamically from file so it can be refreshed without restarting workers.
 # Update /tmp/mgmt_token.txt at the start of each new conversation session.
 MGMT_TOKEN_FILE    = "/tmp/mgmt_token.txt"
@@ -46,10 +47,10 @@ PARITY = int(WORKER) % 2                              # 0 = even UUIDs, 1 = odd
 BATCH  = 25
 
 
-def grok(prompt: str) -> str:
-    url = "https://api.x.ai/v1/chat/completions"
+def gpt(prompt: str) -> str:
+    url = "https://api.openai.com/v1/chat/completions"
     payload = json.dumps({
-        "model": "grok-4-1-fast-non-reasoning",
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": "Medical device expert. Return ONLY valid JSON array, no markdown, no explanation."},
             {"role": "user", "content": prompt},
@@ -59,20 +60,19 @@ def grok(prompt: str) -> str:
     }).encode()
     for attempt in range(8):
         req = urllib.request.Request(url, data=payload, method="POST")
-        req.add_header("Authorization", f"Bearer {GROK_API_KEY}")
+        req.add_header("Authorization", f"Bearer {OPENAI_API_KEY}")
         req.add_header("Content-Type", "application/json")
-        req.add_header("User-Agent", "curl/7.81.0")
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 return json.loads(r.read())["choices"][0]["message"]["content"].strip()
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 wait = 60 * (attempt + 1)
-                print(f"[W{WORKER}] Grok 429 — sleeping {wait}s (attempt {attempt+1}/8)", flush=True)
+                print(f"[W{WORKER}] GPT 429 — sleeping {wait}s (attempt {attempt+1}/8)", flush=True)
                 time.sleep(wait)
             else:
                 raise
-    raise RuntimeError("Grok rate limit: exhausted all retries")
+    raise RuntimeError("GPT rate limit: exhausted all retries")
 
 
 def mgmt_query(sql: str) -> list:
@@ -135,7 +135,7 @@ Devices:
 Return ONLY a JSON array (same order, {len(items)} items):
 [{{"id":"...","description":"...","category":"..."}}]"""
 
-    raw = grok(prompt)
+    raw = gpt(prompt)
     if raw.startswith("```"):
         lines = raw.split("\n")
         raw = "\n".join(lines[1:-1] if lines[-1].strip() in ("```", "```json") else lines[1:])
