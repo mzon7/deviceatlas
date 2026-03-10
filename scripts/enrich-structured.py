@@ -3,51 +3,47 @@
 DeviceAtlas — Structured Disease State & Description Enrichment
 
 Pipeline:
-1. Fetch FDA Product Classification for every unique product_code (~4,893 codes)
-   → cache to /tmp/fda_class_cache.json
-2. Process devices in cursor batches of 25
-3. For each device, build a structured Grok prompt using:
-   - Trade name (device.name)
-   - FDA generic device name (from classification)
-   - FDA medical specialty (Cardiovascular, Dental, etc.)
-   - FDA device class (I / II / III)
-   - clearance_type (PMA / Traditional / De Novo)
-   Grok returns:
-     description       (2-3 sentence clinical description)
-     disease_states    (list of {name, confidence: high|medium|low})
-     enrichment_method (fda_classification | grok_inferred)
-4. For each disease state:
-   - Match/create in deviceatlas_disease_states
-   - Create one approval row per (device × country × disease_state)
-     Existing approval rows for this device+country are preserved for source_ref/date,
-     but disease_state_id is applied across all countries the device appears in.
-5. Save device fields: description, indications_text, indications_source,
-   enrichment_method, enrichment_confidence
+─────────────────────────────────────────────────────────────────
+For FDA devices (have product_code):
+  1. Look up FDA Product Classification cache → generic_name, specialty,
+     device_class, regulation_number
+  2. Grok gets this structured context → disease states + description
+  enrichment_method = "fda_classification", confidence = high/medium
+
+For non-FDA devices (HC-only, EU-only — no product_code):
+  1. Grok gets: device trade name + device_class (HC I-IV / EUDAMED risk class)
+  2. System prompt instructs Grok to use FDA disease taxonomy terms for
+     disease state names → ensures cross-country consistency
+  enrichment_method = "grok_inferred", confidence = low/medium based on
+  how specific the device name is
+
+All disease states created are matched/created in deviceatlas_disease_states
+using the same normalized names → HC and EU approvals share identical
+disease state records with FDA approvals for the same type of device.
+
+Each device gets one approval row per (country × disease_state), so a device
+approved in US, CA, EU for 2 indications gets 6 approval rows total.
 
 Usage:
-  python3 -u enrich-structured.py [worker_id]
-  worker_id: 0 = even last-hex-digit UUIDs, 1 = odd (default: 0)
-
-  Run two workers in parallel:
-    nohup python3 -u enrich-structured.py 0 > /tmp/enrich-s0.log 2>&1 &
-    nohup python3 -u enrich-structured.py 1 > /tmp/enrich-s1.log 2>&1 &
+  nohup python3 -u enrich-structured.py 0 > /tmp/enrich-s0.log 2>&1 &
+  nohup python3 -u enrich-structured.py 1 > /tmp/enrich-s1.log 2>&1 &
 """
 
-import json, os, re, sys, time, urllib.request, urllib.error, uuid
+import json, os, re, sys, time, threading, urllib.request, urllib.error, uuid
 from difflib import SequenceMatcher
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SUPABASE_URL        = os.environ["SUPABASE_URL"]
-SERVICE_KEY         = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-PROJECT_REF         = os.environ["SUPABASE_PROJECT_REF"]
-GROK_API_KEY        = os.environ["GROK_API_KEY"]
+SUPABASE_URL   = os.environ["SUPABASE_URL"]
+SERVICE_KEY    = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+PROJECT_REF    = os.environ["SUPABASE_PROJECT_REF"]
+GROK_API_KEY   = os.environ["GROK_API_KEY"]
 
-WORKER_ID           = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-BATCH               = 25
-GROK_MODEL          = "grok-4-1-fast-non-reasoning"
-GROK_ENDPOINT       = "https://api.x.ai/v1/chat/completions"
-FDA_CLASS_CACHE     = "/tmp/fda_class_cache.json"
-MGMT_TOKEN_FILE     = "/tmp/mgmt_token.txt"
+WORKER_ID      = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+BATCH          = 25
+GROK_MODEL     = "grok-4-1-fast-non-reasoning"
+GROK_ENDPOINT  = "https://api.x.ai/v1/chat/completions"
+FDA_CLASS_CACHE = "/tmp/fda_class_cache.json"
+MGMT_TOKEN_FILE = "/tmp/mgmt_token.txt"
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 HEADERS_REST = {
@@ -98,7 +94,7 @@ def rest_get(path: str, params: str = "") -> list:
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
-def rest_post(path: str, data: list | dict) -> None:
+def rest_post(path: str, data) -> None:
     payload = json.dumps(data if isinstance(data, list) else [data]).encode()
     req = urllib.request.Request(
         f"{SUPABASE_URL}/rest/v1/{path}",
@@ -124,7 +120,7 @@ def rest_delete(path: str, params: str) -> None:
     with urllib.request.urlopen(req, timeout=30) as r:
         pass
 
-# ── FDA Classification Cache ──────────────────────────────────────────────────
+# ── FDA Product Code Classification Cache ────────────────────────────────────
 def fetch_fda_classification(product_code: str) -> dict | None:
     url = f"https://api.fda.gov/device/classification.json?search=product_code:{product_code}&limit=1"
     req = urllib.request.Request(url, headers={"User-Agent": "curl/7.81.0"})
@@ -133,33 +129,31 @@ def fetch_fda_classification(product_code: str) -> dict | None:
             d = json.loads(r.read())
             if "results" not in d:
                 return None
-            r = d["results"][0]
+            rec = d["results"][0]
             return {
-                "generic_name": r.get("device_name", "") or "",
-                "specialty": r.get("medical_specialty_description", "") or "",
-                "device_class": r.get("device_class", "") or "",
-                "regulation_number": r.get("regulation_number", "") or "",
-                "definition": (r.get("definition", "") or "")[:500],
+                "generic_name": rec.get("device_name", "") or "",
+                "specialty": rec.get("medical_specialty_description", "") or "",
+                "device_class": rec.get("device_class", "") or "",
+                "regulation_number": rec.get("regulation_number", "") or "",
+                "definition": (rec.get("definition", "") or "")[:500],
             }
     except Exception:
         return None
 
-def build_fda_class_cache(product_codes: list[str]) -> dict:
+def build_fda_class_cache(product_codes: list) -> dict:
     if os.path.exists(FDA_CLASS_CACHE):
-        print(f"[W{WORKER_ID}] Loading FDA classification cache from disk...")
         with open(FDA_CLASS_CACHE) as f:
             cache = json.load(f)
-        print(f"[W{WORKER_ID}]   {len(cache)} entries loaded")
-        # Fetch any missing codes
         missing = [c for c in product_codes if c not in cache]
         if missing:
-            print(f"[W{WORKER_ID}]   Fetching {len(missing)} new codes...")
+            print(f"[W{WORKER_ID}] Fetching {len(missing)} missing product codes...")
             for i, code in enumerate(missing):
                 cache[code] = fetch_fda_classification(code)
                 if (i + 1) % 200 == 0:
-                    print(f"[W{WORKER_ID}]   {i+1}/{len(missing)}...")
+                    print(f"[W{WORKER_ID}]   {i+1}/{len(missing)} codes...")
                     with open(FDA_CLASS_CACHE, "w") as f:
                         json.dump(cache, f)
+                time.sleep(0.05)
             with open(FDA_CLASS_CACHE, "w") as f:
                 json.dump(cache, f)
         return cache
@@ -172,54 +166,81 @@ def build_fda_class_cache(product_codes: list[str]) -> dict:
             print(f"[W{WORKER_ID}]   {i+1}/{len(product_codes)} codes fetched...")
             with open(FDA_CLASS_CACHE, "w") as f:
                 json.dump(cache, f)
-        time.sleep(0.05)  # gentle rate limiting
+        time.sleep(0.05)
     with open(FDA_CLASS_CACHE, "w") as f:
         json.dump(cache, f)
-    print(f"[W{WORKER_ID}]   Cache saved: {len(cache)} entries")
+    print(f"[W{WORKER_ID}] FDA cache complete: {len(cache)} entries")
     return cache
 
-# ── Grok ──────────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a medical device classification expert.
+# ── Grok enrichment ───────────────────────────────────────────────────────────
+FDA_SYSTEM_PROMPT = """You are a medical device classification expert with deep knowledge of
+FDA regulatory taxonomy and global medical device categories.
+
 Given FDA structured data about a medical device, return a JSON object with:
 - "description": 2-3 sentence clinical description for healthcare professionals.
-  Use the FDA generic name and specialty as primary grounding. Be factual and precise.
-- "disease_states": list of objects {name, confidence} identifying medical conditions
-  this device is used to diagnose, treat, or monitor. Use established medical terminology.
-  confidence: "high" if the indication is definitively established for this device type,
-  "medium" if likely but the device serves a broader purpose, "low" if inferred.
-  Limit to 1-4 disease states. If none can be determined, return [].
-- "enrichment_method": "fda_classification" if you used FDA generic name/specialty data,
-  "grok_inferred" if you only had the trade name to work with.
+  Ground in the FDA classification data (generic name and specialty).
+- "disease_states": list of objects {name, confidence} for medical conditions
+  this device diagnoses, treats, or monitors. Use standard FDA medical terminology.
+  confidence: "high" = definitively established for this FDA device type,
+  "medium" = likely, "low" = inferred. Limit to 1-4. Return [] if unclear.
+- "enrichment_method": "fda_classification"
 
-IMPORTANT: Ground your response in the FDA classification data provided.
-Do NOT invent indications. If the device is a general diagnostic tool (e.g., MRI),
-list the specialties/conditions it is primarily used for in clinical practice.
-Return ONLY the JSON object, no other text."""
+Return ONLY the JSON object."""
 
-def grok_enrich(device_name: str, classification: dict | None) -> dict | None:
-    """Call Grok with structured FDA data. Returns parsed JSON or None."""
-    has_class = classification and (
-        classification.get("generic_name") or classification.get("specialty")
+NON_FDA_SYSTEM_PROMPT = """You are a medical device classification expert.
+
+Given a medical device from Health Canada, EUDAMED (EU), or MHRA (UK), classify
+its disease states and write a clinical description. IMPORTANT:
+
+1. Use the SAME disease state names and FDA medical terminology that the US FDA uses
+   in its device classification system. This ensures cross-country consistency so that
+   the same disease states link Canadian, European, and US approved devices.
+
+2. Use the FDA Medical Specialty categories where applicable:
+   Cardiovascular, Orthopedic, Neurology, Radiology, General Hospital,
+   General Surgery, Dental, Ophthalmology, Ear, Nose & Throat, Gastroenterology,
+   Endocrinology, Hematology, Immunology, Anesthesiology, Physical Medicine, etc.
+
+Return a JSON object with:
+- "description": 2-3 sentence clinical description.
+- "disease_states": list of {name, confidence}. Use standard disease names
+  (e.g. "Type 2 Diabetes Mellitus", "Hypertension", "Osteoarthritis of the Knee").
+  confidence: "high" if the device name clearly indicates the indication,
+  "medium" if likely, "low" if inferred. Limit 1-4. Return [] if genuinely unclear.
+- "enrichment_method": "grok_inferred"
+
+Return ONLY the JSON object."""
+
+def grok_enrich_fda(device_name: str, classification: dict) -> dict | None:
+    context = (
+        f"Trade name: {device_name}\n"
+        f"FDA generic name: {classification['generic_name']}\n"
+        f"FDA medical specialty: {classification['specialty']}\n"
+        f"FDA device class: {classification['device_class']}\n"
+        f"FDA regulation: {classification.get('regulation_number','')}\n"
     )
+    if classification.get("definition"):
+        context += f"FDA definition: {classification['definition']}\n"
+    return _grok_call(FDA_SYSTEM_PROMPT, context)
 
-    if has_class:
-        context = (
-            f"Trade name: {device_name}\n"
-            f"FDA generic device name: {classification['generic_name']}\n"
-            f"FDA medical specialty: {classification['specialty']}\n"
-            f"FDA device class: {classification['device_class']}\n"
-            f"FDA regulation number: {classification['regulation_number']}\n"
-        )
-        if classification.get("definition"):
-            context += f"FDA definition: {classification['definition']}\n"
-    else:
-        context = f"Trade name: {device_name}\n(No FDA classification data available)"
+def grok_enrich_non_fda(device_name: str, device_class: str | None,
+                        country_origin: str) -> dict | None:
+    class_label = ""
+    if device_class:
+        class_label = f"\nDevice risk class: {device_class}"
+    context = (
+        f"Device trade name: {device_name}\n"
+        f"Regulatory origin: {country_origin}{class_label}\n"
+        f"(No FDA product code — classify using FDA disease taxonomy for consistency)"
+    )
+    return _grok_call(NON_FDA_SYSTEM_PROMPT, context)
 
+def _grok_call(system: str, user: str) -> dict | None:
     payload = json.dumps({
         "model": GROK_MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": context},
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
         ],
         "temperature": 0.1,
         "max_tokens": 600,
@@ -238,7 +259,6 @@ def grok_enrich(device_name: str, classification: dict | None) -> dict | None:
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = json.loads(r.read())
             content = data["choices"][0]["message"]["content"].strip()
-            # Strip markdown fences if present
             content = re.sub(r"^```(?:json)?\s*", "", content)
             content = re.sub(r"\s*```$", "", content.strip())
             return json.loads(content)
@@ -249,169 +269,139 @@ def grok_enrich(device_name: str, classification: dict | None) -> dict | None:
                 time.sleep(wait)
                 continue
             raise
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError):
             if attempt < 4:
                 time.sleep(5)
                 continue
             return None
     return None
 
-# ── Disease State Matching ────────────────────────────────────────────────────
+# ── Disease State Cache ───────────────────────────────────────────────────────
 def normalize(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[^\w\s]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
-def similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, a, b).ratio()
-
 class DiseaseStateCache:
     def __init__(self):
-        self._cache: dict[str, str] = {}  # norm_name → id
-        self._load()
-
-    def _load(self):
+        self._cache: dict[str, str] = {}
+        self._lock = threading.Lock()
         rows = mgmt_query("SELECT id, name FROM deviceatlas_disease_states;")
         for r in rows:
             self._cache[normalize(r["name"])] = r["id"]
 
     def get_or_create(self, name: str) -> str:
         norm = normalize(name)
-        # Exact match
-        if norm in self._cache:
-            return self._cache[norm]
-        # Fuzzy match (≥0.85)
-        best_score, best_id = 0.0, None
-        for cand_norm, cand_id in self._cache.items():
-            s = similarity(norm, cand_norm)
-            if s > best_score:
-                best_score, best_id = s, cand_id
-        if best_score >= 0.85 and best_id:
-            # Map to existing entry
-            self._cache[norm] = best_id
-            return best_id
-        # Create new
-        new_id = str(uuid.uuid4())
-        rest_post("deviceatlas_disease_states", {"id": new_id, "name": name.strip().title()})
-        self._cache[norm] = new_id
-        return new_id
+        with self._lock:
+            if norm in self._cache:
+                return self._cache[norm]
+            best_score, best_id = 0.0, None
+            for cand_norm, cand_id in self._cache.items():
+                s = SequenceMatcher(None, norm, cand_norm).ratio()
+                if s > best_score:
+                    best_score, best_id = s, cand_id
+            if best_score >= 0.85 and best_id:
+                self._cache[norm] = best_id
+                return best_id
+            new_id = str(uuid.uuid4())
+            rest_post("deviceatlas_disease_states", {"id": new_id, "name": name.strip().title()})
+            self._cache[norm] = new_id
+            return new_id
 
 # ── Approval Row Helpers ──────────────────────────────────────────────────────
-def get_approvals_for_device(device_id: str) -> list:
-    """Get all approval rows for a device across countries."""
-    rows = rest_get(
+def update_approvals_with_disease_states(device_id: str, ds_ids: list) -> None:
+    """One approval row per (country × disease_state), preserving source_ref/date."""
+    existing = rest_get(
         "deviceatlas_approvals",
         f"device_id=eq.{device_id}&select=id,country,source_ref,approval_date,status,is_active",
     )
-    return rows
-
-def update_approvals_with_disease_states(
-    device_id: str,
-    disease_state_ids: list[str],  # ordered by confidence (primary first)
-    ds_cache: DiseaseStateCache,
-) -> None:
-    """
-    For each country this device has approvals in, ensure there's one approval
-    row per disease state. We keep existing source_ref / approval_date.
-    """
-    existing = get_approvals_for_device(device_id)
-    if not disease_state_ids:
+    if not existing or not ds_ids:
         return
 
-    # Group by country
     by_country: dict[str, list] = {}
     for row in existing:
         by_country.setdefault(row["country"], []).append(row)
 
     for country, rows in by_country.items():
-        # Take the canonical source_ref / date from the first (primary) row
         primary = rows[0]
-        source_ref = primary.get("source_ref")
-        approval_date = primary.get("approval_date")
-        status = primary.get("status", "Approved")
-        is_active = primary.get("is_active", True)
-
-        # Delete all existing approval rows for this device+country
-        existing_ids = ",".join(r["id"] for r in rows)
-        rest_delete("deviceatlas_approvals", f"id=in.({existing_ids})")
-
-        # Insert one row per disease state
-        new_rows = []
-        for ds_id in disease_state_ids:
-            new_rows.append({
+        ids_csv = ",".join(r["id"] for r in rows)
+        rest_delete("deviceatlas_approvals", f"id=in.({ids_csv})")
+        rest_post("deviceatlas_approvals", [
+            {
                 "device_id": device_id,
                 "disease_state_id": ds_id,
                 "country": country,
-                "status": status,
-                "approval_date": approval_date,
-                "source_ref": source_ref,
-                "is_active": is_active,
-            })
-        if new_rows:
-            rest_post("deviceatlas_approvals", new_rows)
+                "status": primary.get("status", "Approved"),
+                "approval_date": primary.get("approval_date"),
+                "source_ref": primary.get("source_ref"),
+                "is_active": primary.get("is_active", True),
+            }
+            for ds_id in ds_ids
+        ])
 
-# ── Main enrichment loop ──────────────────────────────────────────────────────
-def build_indications_text(disease_states: list[dict]) -> str:
-    """Construct a readable indications text from disease state list."""
+# ── Infer regulatory origin from device columns ───────────────────────────────
+def infer_origin(dev: dict) -> str:
+    ct = dev.get("clearance_type") or ""
+    if ct:
+        return "FDA (USA)"
+    cl = dev.get("device_class") or ""
+    # HC classes are Roman numerals I-IV; EUDAMED uses "Class I/IIa/IIb/III/IV"
+    if cl.startswith("Class"):
+        return "EU (EUDAMED)"
+    if cl in ("1", "2", "3", "4"):
+        return "Health Canada"
+    return "International"
+
+def build_indications_text(disease_states: list) -> str:
     if not disease_states:
         return ""
-    parts = []
-    for ds in disease_states:
-        conf = ds.get("confidence", "medium")
-        parts.append(f"{ds['name']} [{conf}]")
-    return "; ".join(parts)
+    return "; ".join(f"{d['name']} [{d.get('confidence','medium')}]" for d in disease_states)
 
+# ── Main Loop ─────────────────────────────────────────────────────────────────
 def main():
-    print("=" * 62)
+    print("=" * 66)
     print(f"DeviceAtlas — Structured Enrichment — Worker {WORKER_ID}")
-    print("=" * 62)
+    print("=" * 66)
 
-    # Load disease state cache
-    print(f"[W{WORKER_ID}] Loading disease state cache...")
     ds_cache = DiseaseStateCache()
-    print(f"[W{WORKER_ID}]   {len(ds_cache._cache)} disease states loaded")
+    print(f"[W{WORKER_ID}] Disease states loaded: {len(ds_cache._cache)}")
 
-    # Get all unique product codes and build classification cache
-    # (only worker 0 builds the cache; worker 1 waits and loads it)
+    # Get unique product codes for FDA cache
     rows = mgmt_query("SELECT DISTINCT product_code FROM deviceatlas_devices WHERE product_code IS NOT NULL;")
     all_codes = [r["product_code"] for r in rows if r.get("product_code")]
-    print(f"[W{WORKER_ID}]   {len(all_codes)} unique product codes")
+    print(f"[W{WORKER_ID}] Unique FDA product codes: {len(all_codes)}")
 
+    # Worker 0 builds cache; worker 1 waits then picks up missing
     if WORKER_ID == 0:
         fda_cache = build_fda_class_cache(all_codes)
     else:
-        # Wait for worker 0 to create the cache
         waited = 0
         while not os.path.exists(FDA_CLASS_CACHE) and waited < 3600:
-            print(f"[W{WORKER_ID}] Waiting for FDA cache from worker 0... ({waited}s)")
+            print(f"[W{WORKER_ID}] Waiting for FDA class cache from worker 0... ({waited}s)")
             time.sleep(30)
             waited += 30
         fda_cache = build_fda_class_cache(all_codes)
 
-    # Find devices not yet enriched, split by worker parity (last hex digit of UUID)
-    # Process ALL devices (both US/FDA and HC-only)
-    cursor = "00000000-0000-0000-0000-000000000000"
-    total_done = 0
-
+    print(f"[W{WORKER_ID}] FDA classification cache ready: {len(fda_cache)} entries")
     print(f"[W{WORKER_ID}] Starting enrichment loop...")
+
+    cursor = "00000000-0000-0000-0000-000000000000"
+    total_done = fda_count = non_fda_count = 0
+
     while True:
-        # Fetch next batch of un-enriched devices for this worker's parity
         sql = f"""
             SELECT d.id, d.name, d.product_code, d.submission_number,
                    d.clearance_type, d.device_class, d.manufacturer
             FROM deviceatlas_devices d
             WHERE d.id > '{cursor}'
               AND d.enrichment_method IS NULL
-              AND (
-                -- Even UUIDs for worker 0, odd for worker 1
-                get_byte(decode(replace(d.id::text, '-', ''), 'hex'), 15) % 2 = {WORKER_ID}
-              )
+              AND get_byte(decode(replace(d.id::text, '-', ''), 'hex'), 15) % 2 = {WORKER_ID}
             ORDER BY d.id
             LIMIT {BATCH};
         """
         devices = mgmt_query(sql)
         if not devices:
-            print(f"[W{WORKER_ID}] No more devices to process — done!")
+            print(f"[W{WORKER_ID}] No more un-enriched devices — done!")
             break
 
         cursor = devices[-1]["id"]
@@ -422,49 +412,61 @@ def main():
             dev_name = dev.get("name") or ""
             product_code = dev.get("product_code")
 
-            # Get classification data
-            classification = fda_cache.get(product_code) if product_code else None
-
-            # Call Grok
-            result = grok_enrich(dev_name, classification)
-            if not result:
-                # Mark as attempted-but-failed to skip next run
-                rest_patch(
-                    "deviceatlas_devices", f"id=eq.{dev_id}",
-                    {"enrichment_method": "not_enriched", "enrichment_confidence": "low",
-                     "updated_at": "now()"}
+            # ── Enrich based on data availability ────────────────────────────
+            if product_code:
+                # FDA device — use structured classification
+                classification = fda_cache.get(product_code)
+                if classification and (classification.get("generic_name") or classification.get("specialty")):
+                    result = grok_enrich_fda(dev_name, classification)
+                    final_method = "fda_classification"
+                    k = dev.get("submission_number", "")
+                    source = f"FDA Product Classification (code: {product_code}, generic: '{classification['generic_name']}')"
+                    if k and k.upper().startswith("K") and len(k) >= 3 and k[1:3].isdigit():
+                        source += f"; 510(k) https://www.accessdata.fda.gov/cdrh_docs/pdf{k[1:3]}/{k}.pdf"
+                    fda_count += 1
+                else:
+                    # product_code known but no classification data → fall back to inference
+                    origin = infer_origin(dev)
+                    result = grok_enrich_non_fda(dev_name, dev.get("device_class"), origin)
+                    final_method = "grok_inferred"
+                    source = f"FDA product_code {product_code} (no classification data); trade name inference using FDA taxonomy"
+                    non_fda_count += 1
+            else:
+                # Non-FDA device (HC-only, EU-only) — infer using FDA taxonomy
+                origin = infer_origin(dev)
+                device_class = dev.get("device_class")
+                result = grok_enrich_non_fda(dev_name, device_class, origin)
+                final_method = "grok_inferred"
+                class_info = f", device class {device_class}" if device_class else ""
+                source = (
+                    f"Inferred from {origin} device trade name{class_info}. "
+                    f"Disease states aligned to FDA medical taxonomy for cross-country consistency."
                 )
+                non_fda_count += 1
+
+            if not result:
+                rest_patch("deviceatlas_devices", f"id=eq.{dev_id}",
+                           {"enrichment_method": "not_enriched", "enrichment_confidence": "low",
+                            "updated_at": "now()"})
                 continue
 
             description = result.get("description", "")
             disease_states_raw = result.get("disease_states", [])
-            enrichment_method = result.get("enrichment_method", "grok_inferred")
 
-            # Determine confidence
-            high_confs = sum(1 for d in disease_states_raw if d.get("confidence") == "high")
-            if enrichment_method == "fda_classification" and high_confs > 0:
-                confidence = "high"
-            elif enrichment_method == "fda_classification":
+            # Confidence: high if FDA data + high confidence DSs, else medium/low
+            if final_method == "fda_classification":
+                confidence = "high" if any(d.get("confidence") == "high" for d in disease_states_raw) else "medium"
+            elif disease_states_raw and any(d.get("confidence") in ("high", "medium") for d in disease_states_raw):
                 confidence = "medium"
             else:
                 confidence = "low"
 
-            # Indications source
-            if product_code:
-                indications_source = f"FDA Product Classification (product_code: {product_code})"
-                if dev.get("submission_number"):
-                    k = dev["submission_number"]
-                    prefix = k[1:3] if k.upper().startswith("K") and len(k) >= 3 else ""
-                    if prefix.isdigit():
-                        indications_source += f"; FDA 510(k) Summary https://www.accessdata.fda.gov/cdrh_docs/pdf{prefix}/{k}.pdf"
-            else:
-                indications_source = "Grok inference from device trade name only"
-
             indications_text = build_indications_text(disease_states_raw)
 
-            # Resolve disease state IDs (in confidence order)
-            sorted_ds = sorted(disease_states_raw, key=lambda x: {"high": 0, "medium": 1, "low": 2}.get(x.get("confidence", "low"), 2))
-            ds_ids = []
+            # Resolve / create disease state IDs (primary indication first)
+            sorted_ds = sorted(disease_states_raw,
+                               key=lambda x: {"high": 0, "medium": 1, "low": 2}.get(x.get("confidence", "low"), 2))
+            ds_ids: list[str] = []
             for ds in sorted_ds:
                 name = (ds.get("name") or "").strip()
                 if not name:
@@ -474,47 +476,43 @@ def main():
                     if ds_id not in ds_ids:
                         ds_ids.append(ds_id)
                 except Exception as e:
-                    print(f"[W{WORKER_ID}] DS create error for '{name}': {e}")
+                    print(f"[W{WORKER_ID}] DS err '{name}': {e}")
 
-            # Update approvals for all countries this device appears in
             if ds_ids:
                 try:
-                    update_approvals_with_disease_states(dev_id, ds_ids, ds_cache)
+                    update_approvals_with_disease_states(dev_id, ds_ids)
                 except Exception as e:
-                    print(f"[W{WORKER_ID}] Approval update error for {dev_id}: {e}")
+                    print(f"[W{WORKER_ID}] Approval update err {dev_id}: {e}")
 
-            # Update device record
             try:
-                rest_patch(
-                    "deviceatlas_devices", f"id=eq.{dev_id}",
-                    {
-                        "description": description or None,
-                        "indications_text": indications_text or None,
-                        "indications_source": indications_source,
-                        "enrichment_method": enrichment_method,
-                        "enrichment_confidence": confidence,
-                        "updated_at": "now()",
-                    }
-                )
+                rest_patch("deviceatlas_devices", f"id=eq.{dev_id}", {
+                    "description": description or None,
+                    "indications_text": indications_text or None,
+                    "indications_source": source,
+                    "enrichment_method": final_method,
+                    "enrichment_confidence": confidence,
+                    "updated_at": "now()",
+                })
             except Exception as e:
-                print(f"[W{WORKER_ID}] Device patch error for {dev_id}: {e}")
+                print(f"[W{WORKER_ID}] Device patch err {dev_id}: {e}")
 
         total_done += len(devices)
         print(
             f"[W{WORKER_ID}] batch={batch_num} cursor={cursor[:8]}... "
-            f"✓ +{len(devices)} (total={total_done})"
+            f"✓ +{len(devices)} total={total_done} "
+            f"[fda={fda_count} inferred={non_fda_count}]"
         )
 
-    # Final count
+    # Final stats
     counts = mgmt_query(
         "SELECT enrichment_method, COUNT(*) as cnt "
         "FROM deviceatlas_devices GROUP BY enrichment_method ORDER BY cnt DESC;"
     )
-    print("\n" + "=" * 62)
-    print("ENRICHMENT COMPLETE")
+    print("\n" + "=" * 66)
+    print(f"WORKER {WORKER_ID} COMPLETE")
     for r in counts:
-        print(f"  {r['enrichment_method'] or 'null':30s} {r['cnt']}")
-    print("=" * 62)
+        print(f"  {(r['enrichment_method'] or 'null'):28s} {r['cnt']}")
+    print("=" * 66)
 
 
 if __name__ == "__main__":
