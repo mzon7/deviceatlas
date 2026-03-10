@@ -305,6 +305,15 @@ serve(async (req) => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Internal server error";
     console.error("enrich-device error:", msg);
+    try {
+      const supabaseForError = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      await supabaseForError.from("incubator_self_heal_errors").insert({
+        category: "edge_function",
+        project_prefix: "deviceatlas_",
+        source: "enrich-device",
+        error_message: msg,
+      });
+    } catch { /* swallow reporting errors */ }
     return new Response(
       JSON.stringify({ data: null, error: msg }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
