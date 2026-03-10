@@ -1,4 +1,4 @@
-import type { Device, DeviceProfileSummary } from "../lib/useDeviceProfile";
+import type { Device, DeviceProfileSummary, EnrichmentMethod } from "../lib/useDeviceProfile";
 
 interface DeviceMetaCardProps {
   device: Device;
@@ -127,12 +127,19 @@ export default function DeviceMetaCard({ device, summary }: DeviceMetaCardProps)
                 fontSize: 14,
                 lineHeight: 1.65,
                 color: "#444",
-                margin: "0 0 20px 0",
+                margin: "0 0 8px 0",
                 maxWidth: 680,
               }}
             >
               {device.description}
             </p>
+          )}
+
+          {/* Data quality badge */}
+          {device.enrichment_method && (
+            <div style={{ marginBottom: 16 }}>
+              <EnrichmentBadge method={device.enrichment_method} source={device.indications_source} />
+            </div>
           )}
 
           {/* Approval summary chips */}
@@ -182,6 +189,47 @@ interface ApprovalChipProps {
   count: number;
   total: number;
   color: string;
+}
+
+interface EnrichmentBadgeProps {
+  method: EnrichmentMethod;
+  source: string | null;
+}
+
+function EnrichmentBadge({ method, source }: EnrichmentBadgeProps) {
+  if (!method || method === "not_enriched") return null;
+
+  const isFDA = method === "fda_classification";
+  const label = isFDA ? "FDA-grounded data" : "AI-inferred data";
+  const tooltip = isFDA
+    ? source ?? "Disease states sourced from FDA Product Classification"
+    : "Indications inferred by AI from device trade name only";
+  const color = isFDA ? "#16a34a" : "#d97706";
+  const bg = isFDA ? "rgba(22,163,74,0.07)" : "rgba(217,119,6,0.07)";
+  const border = isFDA ? "rgba(22,163,74,0.2)" : "rgba(217,119,6,0.2)";
+  const icon = isFDA ? "✓" : "~";
+
+  return (
+    <div
+      title={tooltip}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "3px 10px",
+        borderRadius: 20,
+        background: bg,
+        border: `1px solid ${border}`,
+        fontSize: 11,
+        fontWeight: 600,
+        color,
+        cursor: "default",
+      }}
+    >
+      <span>{icon}</span>
+      <span>{label}</span>
+    </div>
+  );
 }
 
 function ApprovalChip({ flag, label, count, total, color }: ApprovalChipProps) {

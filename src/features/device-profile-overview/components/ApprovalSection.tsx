@@ -25,6 +25,29 @@ const COUNTRY_CONFIG = {
   },
 };
 
+/** Build an official link from a source_ref based on country. */
+function sourceRefUrl(ref: string, country: "US" | "CA"): string | null {
+  if (country === "US") {
+    const upper = ref.toUpperCase();
+    if (upper.startsWith("K")) {
+      // 510(k) — link to FDA PMN record
+      return `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpmn/pmn.cfm?ID=${ref}`;
+    }
+    if (upper.startsWith("P")) {
+      // PMA
+      return `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=${ref}`;
+    }
+    if (upper.startsWith("D")) {
+      // De Novo
+      return `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpmn/denovo.cfm?ID=${ref}`;
+    }
+  }
+  if (country === "CA") {
+    return `https://health-products.canada.ca/mdall-limh/deviceid-idproduit/${ref}`;
+  }
+  return null;
+}
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "—";
   try {
@@ -124,20 +147,29 @@ export default function ApprovalSection({ country, approvals }: ApprovalSectionP
                   <span style={{ color: "#555" }}>{formatDate(approval.approval_date)}</span>
                 </td>
                 <td style={tdStyle}>
-                  {approval.source_ref ? (
-                    <span
-                      style={{
-                        fontFamily: "monospace",
-                        fontSize: 11,
-                        background: "rgba(0,0,0,0.04)",
-                        padding: "2px 6px",
-                        borderRadius: 4,
-                        color: "#555",
-                      }}
-                    >
-                      {approval.source_ref}
-                    </span>
-                  ) : (
+                  {approval.source_ref ? (() => {
+                    const url = sourceRefUrl(approval.source_ref, country);
+                    const refEl = (
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: 11,
+                          background: "rgba(0,0,0,0.04)",
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          color: url ? cfg.color : "#555",
+                        }}
+                      >
+                        {approval.source_ref}
+                        {url && <span style={{ fontSize: 9, marginLeft: 3 }}>↗</span>}
+                      </span>
+                    );
+                    return url ? (
+                      <a href={url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+                        {refEl}
+                      </a>
+                    ) : refEl;
+                  })() : (
                     <span style={{ color: "#ccc" }}>—</span>
                   )}
                 </td>

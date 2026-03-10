@@ -20,6 +20,9 @@ export interface Approval {
   disease_state: DiseaseState | null;
 }
 
+export type EnrichmentMethod = "fda_classification" | "grok_inferred" | "not_enriched" | null;
+export type EnrichmentConfidence = "high" | "medium" | "low" | null;
+
 export interface Device {
   id: string;
   name: string;
@@ -29,6 +32,11 @@ export interface Device {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // Enrichment metadata
+  indications_text: string | null;
+  indications_source: string | null;
+  enrichment_method: EnrichmentMethod;
+  enrichment_confidence: EnrichmentConfidence;
 }
 
 export interface DeviceProfileSummary {

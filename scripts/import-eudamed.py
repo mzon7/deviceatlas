@@ -13,6 +13,7 @@ EUDAMED link: https://ec.europa.eu/tools/eudamed/#/screen/search-device?basicUdi
 """
 
 import json, os, re, sys, time, urllib.request, urllib.error, uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 
 SUPABASE_URL          = os.environ["SUPABASE_URL"]
@@ -102,7 +103,7 @@ def mgmt_query(sql: str) -> list:
 
 
 def download_all_eudamed():
-    """Download all EUDAMED devices, cache to disk."""
+    """Download all EUDAMED devices using parallel threads, cache to disk."""
     cache_file = "/tmp/eudamed_devices.json"
     if os.path.exists(cache_file):
         print("Loading EUDAMED from cache...")
@@ -111,25 +112,44 @@ def download_all_eudamed():
         print(f"  {len(devices)} devices loaded from cache")
         return devices
 
-    print("Downloading EUDAMED devices (425K records, this takes ~10 min)...")
-    # Get total pages first
+    print("Downloading EUDAMED devices (425K records)...")
     first_page = fetch_eudamed_page(0)
     total_pages = first_page.get("totalPages", 0)
     total_elements = first_page.get("totalElements", 0)
-    print(f"  Total: {total_elements} devices, {total_pages} pages")
+    print(f"  Total: {total_elements} devices, {total_pages} pages — using 20 threads")
 
+    # Collect results in a dict keyed by page number for ordered assembly
+    results: dict[int, list] = {0: first_page.get("content", [])}
+    done_count = [len(results[0])]
+    lock = __import__("threading").Lock()
+
+    def fetch_page(page: int) -> tuple[int, list]:
+        for attempt in range(4):
+            try:
+                data = fetch_eudamed_page(page)
+                return page, data.get("content", [])
+            except Exception:
+                if attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+        return page, []
+
+    WORKERS = 20
+    remaining = list(range(1, total_pages))
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = {executor.submit(fetch_page, p): p for p in remaining}
+        for fut in as_completed(futures):
+            page, content = fut.result()
+            with lock:
+                results[page] = content
+                done_count[0] += len(content)
+                completed = len(results)
+                if completed % 500 == 0:
+                    print(f"  {done_count[0]}/{total_elements} devices ({completed}/{total_pages} pages)...")
+
+    # Assemble in order
     all_devices = []
-    all_devices.extend(first_page.get("content", []))
-
-    for page in range(1, total_pages):
-        try:
-            data = fetch_eudamed_page(page)
-            all_devices.extend(data.get("content", []))
-        except Exception as e:
-            print(f"  Error on page {page}: {e} — skipping")
-            continue
-        if page % 50 == 0:
-            print(f"  Downloaded {len(all_devices)}/{total_elements} devices (page {page}/{total_pages})...")
+    for page in sorted(results.keys()):
+        all_devices.extend(results[page])
 
     print(f"  Total downloaded: {len(all_devices)}")
     with open(cache_file, "w") as f:
