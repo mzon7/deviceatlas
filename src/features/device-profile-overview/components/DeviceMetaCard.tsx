@@ -151,6 +151,24 @@ export default function DeviceMetaCard({ device, summary }: DeviceMetaCardProps)
               total={summary.ca_count}
               color="#ea105c"
             />
+            {(summary.eu_count ?? 0) > 0 && (
+              <ApprovalChip
+                flag="🇪🇺"
+                label="EU (EUDAMED)"
+                count={summary.eu_approved_count ?? 0}
+                total={summary.eu_count ?? 0}
+                color="#003399"
+              />
+            )}
+            {(summary.uk_count ?? 0) > 0 && (
+              <ApprovalChip
+                flag="🇬🇧"
+                label="UK (MHRA)"
+                count={summary.uk_approved_count ?? 0}
+                total={summary.uk_count ?? 0}
+                color="#012169"
+              />
+            )}
           </div>
         </div>
       </div>

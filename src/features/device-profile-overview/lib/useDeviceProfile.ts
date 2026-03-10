@@ -10,14 +10,14 @@ export interface DiseaseState {
 
 export interface Approval {
   id: string;
-  country: "US" | "CA";
+  country: "US" | "CA" | "EU" | "UK";
   status: string;
   approval_date: string | null;
   retired_date: string | null;
   source_ref: string | null;
   is_active: boolean;
   updated_at: string;
-  disease_state: DiseaseState;
+  disease_state: DiseaseState | null;
 }
 
 export interface Device {
@@ -34,9 +34,13 @@ export interface Device {
 export interface DeviceProfileSummary {
   us_count: number;
   ca_count: number;
+  eu_count: number;
+  uk_count: number;
   total_count: number;
   us_approved_count: number;
   ca_approved_count: number;
+  eu_approved_count: number;
+  uk_approved_count: number;
 }
 
 export interface DeviceProfileData {
@@ -44,6 +48,8 @@ export interface DeviceProfileData {
   approvals: Approval[];
   us_approvals: Approval[];
   ca_approvals: Approval[];
+  eu_approvals: Approval[];
+  uk_approvals: Approval[];
   summary: DeviceProfileSummary;
 }
 
