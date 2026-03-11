@@ -35,51 +35,9 @@ def log(msg: str):
 
 
 # ── Worker definitions ─────────────────────────────────────────────────────────
-# ps_pattern: unique substring to find this process in `ps aux` output
-WORKERS = [
-    {
-        "name":        "enrich-structured-0",
-        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/enrich-structured.py", "0"],
-        "log":         "/tmp/enrich-s0.log",
-        "ps_pattern":  "enrich-structured.py 0",
-        "done_marker": "No more un-enriched devices — done!",
-    },
-    {
-        "name":        "enrich-structured-1",
-        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/enrich-structured.py", "1"],
-        "log":         "/tmp/enrich-s1.log",
-        "ps_pattern":  "enrich-structured.py 1",
-        "done_marker": "No more un-enriched devices — done!",
-    },
-    {
-        "name":        "eudamed-import",
-        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/import-eudamed.py"],
-        "log":         "/tmp/eudamed-import.log",
-        "ps_pattern":  "import-eudamed.py",
-        "done_marker": "IMPORT COMPLETE",
-    },
-    {
-        "name":        "hc-enrich-0",
-        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/enrich-hc-devices.py", "0"],
-        "log":         "/tmp/hc-enrich-w0.log",
-        "ps_pattern":  "enrich-hc-devices.py 0",
-        "done_marker": "No more devices. Total enriched:",
-    },
-    {
-        "name":        "hc-enrich-1",
-        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/enrich-hc-devices.py", "1"],
-        "log":         "/tmp/hc-enrich-w1.log",
-        "ps_pattern":  "enrich-hc-devices.py 1",
-        "done_marker": "No more devices. Total enriched:",
-    },
-    {
-        "name":        "pmda-import",
-        "cmd":         ["python3", "-u", f"{SCRIPTS_DIR}/import-pmda.py"],
-        "log":         "/tmp/pmda-import3.log",
-        "ps_pattern":  "import-pmda.py",
-        "done_marker": "DONE — Japan PMDA Import Summary",
-    },
-]
+# All batch workers disabled — enrichment is now on-demand via the enrich-device edge function.
+# Workers are triggered per-device when a user opens a device profile page for an unenriched device.
+WORKERS = []
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
